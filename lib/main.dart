@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 void main() {
@@ -157,60 +155,94 @@ class _StressCenter extends StatelessWidget {
   Widget build(BuildContext context) {
     final roundedValue = value.round();
 
-    return AspectRatio(
-      aspectRatio: 0.78,
-      child: Stack(
-        alignment: Alignment.center,
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Positioned.fill(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 380),
-              child: MoodIllustration(
-                key: ValueKey(profile.imageIndex),
-                profile: profile,
-              ),
-            ),
-          ),
-          Positioned(top: 24, child: _StatusPill(profile: profile)),
+          _StatusPill(profile: profile),
+          const SizedBox(height: 16),
           Semantics(
             label: '当前压力值 $roundedValue',
-            child: Container(
-              width: 188,
-              height: 188,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.83),
-                boxShadow: [
-                  BoxShadow(
-                    color: profile.accentColor.withValues(alpha: 0.18),
-                    blurRadius: 36,
-                    offset: const Offset(0, 20),
+            child: _StressPillWindow(
+              profile: profile,
+              roundedValue: roundedValue,
+            ),
+          ),
+          const SizedBox(height: 18),
+          _RecordMoodButton(profile: profile),
+        ],
+      ),
+    );
+  }
+}
+
+class _StressPillWindow extends StatelessWidget {
+  const _StressPillWindow({required this.profile, required this.roundedValue});
+
+  final StressProfile profile;
+  final int roundedValue;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 228,
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 26),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: Colors.white.withValues(alpha: 0.62),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.92),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: profile.accentColor.withValues(alpha: 0.18),
+            blurRadius: 38,
+            offset: const Offset(0, 22),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 380),
+            child: MoodIllustration(
+              key: ValueKey(profile.imageIndex),
+              profile: profile,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Container(
+            width: 116,
+            height: 116,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: 0.86),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.96),
+                width: 1.5,
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  '$roundedValue',
+                  style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFF1F2A24),
                   ),
-                ],
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.95),
-                  width: 1.5,
                 ),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    '$roundedValue',
-                    style: Theme.of(context).textTheme.displayLarge?.copyWith(
-                      fontWeight: FontWeight.w900,
-                      color: const Color(0xFF1F2A24),
-                    ),
+                Text(
+                  '压力值',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: const Color(0xFF68746D),
+                    fontWeight: FontWeight.w700,
                   ),
-                  Text(
-                    '压力值',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: const Color(0xFF68746D),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ],
@@ -246,6 +278,31 @@ class _StatusPill extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _RecordMoodButton extends StatelessWidget {
+  const _RecordMoodButton({required this.profile});
+
+  final StressProfile profile;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton.tonalIcon(
+      onPressed: () {},
+      icon: const Icon(Icons.add, size: 20),
+      label: const Text('记录当前心情'),
+      style: FilledButton.styleFrom(
+        backgroundColor: Colors.white.withValues(alpha: 0.74),
+        foregroundColor: profile.accentColor,
+        textStyle: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+        shape: const StadiumBorder(),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.9)),
       ),
     );
   }
@@ -355,112 +412,16 @@ class MoodIllustration extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _MoodIllustrationPainter(profile),
-      child: const SizedBox.expand(),
-    );
-  }
-}
-
-class _MoodIllustrationPainter extends CustomPainter {
-  const _MoodIllustrationPainter(this.profile);
-
-  final StressProfile profile;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final shortSide = math.min(size.width, size.height);
-    final paint = Paint()..isAntiAlias = true;
-
-    paint.shader = RadialGradient(
-      colors: [
-        profile.accentColor.withValues(alpha: 0.23),
-        profile.hazeColor.withValues(alpha: 0.12),
-        Colors.transparent,
-      ],
-    ).createShader(Rect.fromCircle(center: center, radius: shortSide * 0.58));
-    canvas.drawCircle(center, shortSide * 0.56, paint);
-    paint.shader = null;
-
-    final bodyRect = Rect.fromCenter(
-      center: center.translate(0, shortSide * 0.06),
-      width: shortSide * 0.58,
-      height: shortSide * 0.72,
-    );
-    paint.color = profile.imageColor.withValues(alpha: 0.78);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(bodyRect, Radius.circular(shortSide * 0.28)),
-      paint,
-    );
-
-    paint.color = Colors.white.withValues(alpha: 0.7);
-    for (var i = 0; i < 5; i++) {
-      final angle = (i * 72 + profile.imageIndex * 18) * math.pi / 180;
-      final orbit = shortSide * (0.34 + i * 0.018);
-      final dotCenter =
-          center + Offset(math.cos(angle), math.sin(angle)) * orbit;
-      canvas.drawCircle(dotCenter, shortSide * (0.036 + i * 0.003), paint);
-    }
-
-    final faceY = center.dy - shortSide * 0.03;
-    final eyePaint = Paint()
-      ..isAntiAlias = true
-      ..color = const Color(0xFF26342D).withValues(alpha: 0.75);
-    canvas.drawCircle(
-      Offset(center.dx - shortSide * 0.1, faceY),
-      5.5,
-      eyePaint,
-    );
-    canvas.drawCircle(
-      Offset(center.dx + shortSide * 0.1, faceY),
-      5.5,
-      eyePaint,
-    );
-
-    final mouthPaint = Paint()
-      ..isAntiAlias = true
-      ..color = const Color(0xFF26342D).withValues(alpha: 0.65)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.5
-      ..strokeCap = StrokeCap.round;
-
-    final mouthWidth = shortSide * 0.16;
-    final moodCurve = switch (profile.imageIndex) {
-      0 => shortSide * 0.075,
-      1 => shortSide * 0.018,
-      2 => -shortSide * 0.02,
-      _ => -shortSide * 0.07,
-    };
-    final mouthPath = Path()
-      ..moveTo(center.dx - mouthWidth, center.dy + shortSide * 0.08)
-      ..quadraticBezierTo(
-        center.dx,
-        center.dy + shortSide * 0.08 + moodCurve,
-        center.dx + mouthWidth,
-        center.dy + shortSide * 0.08,
-      );
-    canvas.drawPath(mouthPath, mouthPaint);
-
-    if (profile.imageIndex >= 2) {
-      paint.color = const Color(0xFFFFF6E9).withValues(alpha: 0.8);
-      canvas.drawOval(
-        Rect.fromCenter(
-          center: Offset(
-            center.dx + shortSide * 0.16,
-            center.dy - shortSide * 0.18,
-          ),
-          width: shortSide * 0.18,
-          height: shortSide * 0.24,
+    return SizedBox.square(
+      dimension: 154,
+      child: ClipOval(
+        child: Image.asset(
+          profile.imageAsset,
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.high,
         ),
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _MoodIllustrationPainter oldDelegate) {
-    return oldDelegate.profile != profile;
+      ),
+    );
   }
 }
 
@@ -471,7 +432,7 @@ class StressProfile {
     required this.baseColor,
     required this.hazeColor,
     required this.accentColor,
-    required this.imageColor,
+    required this.imageAsset,
     required this.imageIndex,
     required this.icon,
   });
@@ -481,7 +442,7 @@ class StressProfile {
   final Color baseColor;
   final Color hazeColor;
   final Color accentColor;
-  final Color imageColor;
+  final String imageAsset;
   final int imageIndex;
   final IconData icon;
 
@@ -493,7 +454,7 @@ class StressProfile {
         baseColor: Color(0xFFF7FFF8),
         hazeColor: Color(0xFFD7F4DB),
         accentColor: Color(0xFF5C9B72),
-        imageColor: Color(0xFF9FD6AD),
+        imageAsset: 'assets/images/mood_0.jpg',
         imageIndex: 0,
         icon: Icons.spa_outlined,
       );
@@ -505,7 +466,7 @@ class StressProfile {
         baseColor: Color(0xFFFFFCF4),
         hazeColor: Color(0xFFEAD4A6),
         accentColor: Color(0xFFA77A31),
-        imageColor: Color(0xFFD9B66B),
+        imageAsset: 'assets/images/mood_1.jpg',
         imageIndex: 1,
         icon: Icons.self_improvement_outlined,
       );
@@ -517,7 +478,7 @@ class StressProfile {
         baseColor: Color(0xFFFFF8F6),
         hazeColor: Color(0xFFFFC7BC),
         accentColor: Color(0xFFD36C5A),
-        imageColor: Color(0xFFF0A093),
+        imageAsset: 'assets/images/mood_2.jpg',
         imageIndex: 2,
         icon: Icons.favorite_border,
       );
@@ -528,7 +489,7 @@ class StressProfile {
       baseColor: Color(0xFFFFF7F6),
       hazeColor: Color(0xFFFFB7B0),
       accentColor: Color(0xFFBE514A),
-      imageColor: Color(0xFFE4837D),
+      imageAsset: 'assets/images/mood_3.jpg',
       imageIndex: 3,
       icon: Icons.health_and_safety_outlined,
     );
