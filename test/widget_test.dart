@@ -21,6 +21,39 @@ void main() {
     expect(find.text('恢复建议'), findsOneWidget);
   });
 
+  testWidgets('stress home can switch sample health data', (tester) async {
+    await tester.pumpWidget(
+      const MoodStressApp(enableHighFidelityIsland: false),
+    );
+
+    await tester.tap(find.text('使用测试数据'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('选择测试数据'), findsOneWidget);
+    expect(find.text('平稳放松'), findsWidgets);
+    expect(find.text('压力偏高'), findsWidgets);
+
+    await tester.tap(find.text('压力偏高').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('73'), findsOneWidget);
+    expect(find.text('压力偏高'), findsOneWidget);
+    expect(find.textContaining('测试数据 · 压力偏高'), findsOneWidget);
+
+    await tester.tap(find.text('使用测试数据'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.text('需要恢复').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('91'), findsOneWidget);
+    expect(find.text('需要恢复'), findsOneWidget);
+    expect(find.textContaining('测试数据 · 需要恢复'), findsOneWidget);
+  });
+
   testWidgets('flower reminder page saves a reminder', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: FlowerReminderPage()));
 
@@ -42,6 +75,42 @@ void main() {
 
     expect(find.text('喝水'), findsOneWidget);
     expect(find.text('花时来信已收好。'), findsOneWidget);
+  });
+
+  testWidgets('cabin opens health data dashboard', (tester) async {
+    final estimate = const HealthStressEstimator().sampleEstimate(
+      HealthStressEstimator.samples[2],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: CabinPage(currentEstimate: estimate)),
+    );
+
+    expect(find.text('木屋'), findsOneWidget);
+    expect(find.text('健康数据详情'), findsOneWidget);
+
+    await tester.tap(find.text('健康数据详情'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('当前压力趋势'), findsOneWidget);
+    expect(find.text('心率'), findsOneWidget);
+    expect(find.text('HRV'), findsOneWidget);
+    expect(find.text('0点'), findsWidgets);
+
+    await tester.scrollUntilVisible(
+      find.text('睡眠'),
+      220,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('睡眠'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('步数'),
+      260,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('步数'), findsOneWidget);
   });
 
   testWidgets('deepseek chat page starts a new conversation', (tester) async {

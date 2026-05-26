@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:health/health.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -55,6 +56,9 @@ class _StressHomePageState extends State<StressHomePage>
   MoodOption? _selectedMood;
   IslandVisualMode _islandMode = IslandVisualMode.day;
   bool _autoSwitchEnabled = false;
+  bool _isSyncingHealth = false;
+  String? _healthSyncSummary;
+  HealthStressEstimate? _latestHealthEstimate;
   TimeOfDay _dayStartTime = const TimeOfDay(hour: 7, minute: 0);
   TimeOfDay _nightStartTime = const TimeOfDay(hour: 22, minute: 0);
   Timer? _autoSwitchTimer;
@@ -260,6 +264,78 @@ class _StressHomePageState extends State<StressHomePage>
     await prefs.setBool(_newUserQuestionsCompletedKey, true);
   }
 
+  Future<void> _syncHealthStress() async {
+    if (_isSyncingHealth) {
+      return;
+    }
+
+    setState(() {
+      _isSyncingHealth = true;
+      _healthSyncSummary = '正在同步健康数据...';
+    });
+
+    try {
+      final result = await const HealthStressEstimator().estimate();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _stressValue = result.stressValue;
+        _healthSyncSummary = result.summary;
+        _latestHealthEstimate = result;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已根据健康数据更新压力值。')));
+    } on HealthStressPermissionException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _healthSyncSummary = error.message);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      const message = '暂时无法读取健康数据，请确认 HealthKit 权限和真机数据。';
+      setState(() => _healthSyncSummary = message);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) {
+        setState(() => _isSyncingHealth = false);
+      }
+    }
+  }
+
+  Future<void> _showSampleHealthDataSheet() async {
+    final sample = await showModalBottomSheet<HealthStressSample>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFF8FFFC),
+      builder: (context) {
+        return const _HealthSampleSheet(samples: HealthStressEstimator.samples);
+      },
+    );
+    if (sample == null || !mounted) {
+      return;
+    }
+
+    final result = const HealthStressEstimator().sampleEstimate(sample);
+    setState(() {
+      _stressValue = result.stressValue;
+      _healthSyncSummary = result.summary;
+      _latestHealthEstimate = result;
+    });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已载入${sample.label}测试数据。')));
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = _profile;
@@ -310,11 +386,8 @@ class _StressHomePageState extends State<StressHomePage>
                     case _IslandHotspotTarget.hillHouse:
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
-                          builder: (context) => const IslandFeaturePage(
-                            title: '木屋',
-                            icon: Icons.cottage_outlined,
-                            description: '这里之后可以接木屋的互动、记录或任务。',
-                          ),
+                          builder: (context) =>
+                              CabinPage(currentEstimate: _latestHealthEstimate),
                         ),
                       );
                     case _IslandHotspotTarget.lighthouse:
@@ -395,13 +468,13 @@ class _StressHomePageState extends State<StressHomePage>
                                 islandTheme: islandTheme,
                               ),
                             ),
-                            const SizedBox(height: 12),
-                            _StressSlider(
-                              value: _stressValue,
-                              activeColor: islandTheme.controlAccentColor,
-                              onChanged: (value) {
-                                setState(() => _stressValue = value);
-                              },
+                            const SizedBox(height: 10),
+                            _HealthSyncButton(
+                              isSyncing: _isSyncingHealth,
+                              summary: _healthSyncSummary,
+                              accentColor: islandTheme.controlAccentColor,
+                              onPressed: _syncHealthStress,
+                              onSamplePressed: _showSampleHealthDataSheet,
                             ),
                           ],
                         ),
@@ -2778,6 +2851,487 @@ class IslandFeaturePage extends StatelessWidget {
   }
 }
 
+class CabinPage extends StatelessWidget {
+  const CabinPage({super.key, required this.currentEstimate});
+
+  final HealthStressEstimate? currentEstimate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FFF4),
+      appBar: AppBar(
+        title: const Text('木屋'),
+        backgroundColor: const Color(0xFFF8FFF4),
+        foregroundColor: const Color(0xFF24302A),
+        elevation: 0,
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
+          children: [
+            Text(
+              '把身体信号放在这里慢慢看。',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFF587171),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _CabinOptionTile(
+              icon: Icons.monitor_heart_rounded,
+              title: '健康数据详情',
+              subtitle: currentEstimate == null
+                  ? '还没有同步数据，可先查看测试数据预览'
+                  : '查看当前压力、心率、HRV、睡眠和步数',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (context) => HealthDataDashboardPage(
+                      currentEstimate: currentEstimate,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CabinOptionTile extends StatelessWidget {
+  const _CabinOptionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF5C9B72).withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(23),
+                ),
+                child: Icon(icon, color: const Color(0xFF5C9B72), size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Color(0xFF24302A),
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Color(0xFF60736C),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class HealthDataDashboardPage extends StatelessWidget {
+  const HealthDataDashboardPage({super.key, required this.currentEstimate});
+
+  final HealthStressEstimate? currentEstimate;
+
+  @override
+  Widget build(BuildContext context) {
+    final estimate =
+        currentEstimate ??
+        const HealthStressEstimator().sampleEstimate(
+          HealthStressEstimator.samples[1],
+        );
+    final profile = StressProfile.fromValue(estimate.stressValue);
+    final stats = estimate.stats;
+    final dayLabels = _dayTimeLabels();
+    final weekLabels = _weekDateLabels(DateTime.now());
+    final metrics = [
+      _HealthMetric(
+        label: '心率',
+        value: '${stats.averageHeartRate?.round() ?? 0}',
+        unit: '次/分',
+        color: const Color(0xFFE25D56),
+        points: _seriesAround(stats.averageHeartRate ?? 72, 9, 5),
+        axisLabels: dayLabels,
+      ),
+      _HealthMetric(
+        label: 'HRV',
+        value: '${stats.averageHrv?.round() ?? 0}',
+        unit: 'ms',
+        color: const Color(0xFF3D8E75),
+        points: _seriesAround(stats.averageHrv ?? 42, 7, -4),
+        axisLabels: dayLabels,
+      ),
+      _HealthMetric(
+        label: '睡眠',
+        value: (stats.sleepMinutes / 60).toStringAsFixed(1),
+        unit: '小时',
+        color: const Color(0xFF597BC7),
+        points: _seriesAround(stats.sleepMinutes / 60, 1.0, 0.3),
+        axisLabels: weekLabels,
+      ),
+      _HealthMetric(
+        label: '步数',
+        value: '${stats.steps.round()}',
+        unit: '步',
+        color: const Color(0xFFD19A35),
+        points: _seriesAround(stats.steps / 1000, 1.8, 0.8),
+        axisLabels: weekLabels,
+      ),
+    ];
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FFF4),
+      appBar: AppBar(
+        title: const Text('健康数据详情'),
+        backgroundColor: const Color(0xFFF8FFF4),
+        foregroundColor: const Color(0xFF24302A),
+        elevation: 0,
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE2ECE6)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: profile.accentColor.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(32),
+                    ),
+                    child: Icon(
+                      profile.icon,
+                      color: profile.accentColor,
+                      size: 30,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '当前压力趋势',
+                          style: TextStyle(
+                            color: Color(0xFF60736C),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${estimate.stressValue.round()} · ${profile.label}',
+                          style: const TextStyle(
+                            color: Color(0xFF24302A),
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          currentEstimate == null ? '测试数据预览' : estimate.summary,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF60736C),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (currentEstimate == null) ...[
+              const SizedBox(height: 10),
+              const Text(
+                '首页同步 HealthKit 或选择测试数据后，这里会显示当前那组数据。',
+                style: TextStyle(
+                  color: Color(0xFF60736C),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+            const SizedBox(height: 14),
+            for (final metric in metrics) ...[
+              _HealthMetricCard(metric: metric),
+              const SizedBox(height: 10),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  static List<double> _seriesAround(double center, double spread, double tilt) {
+    final factors = [-0.8, -0.2, 0.4, -0.4, 0.9, 0.2, 1.0];
+    return [
+      for (var i = 0; i < factors.length; i++)
+        (center + factors[i] * spread + (i - 3) * tilt / 6).clamp(0, 99999),
+    ];
+  }
+
+  static List<String> _dayTimeLabels() {
+    return const ['0点', '4点', '8点', '12点', '16点', '20点', '24点'];
+  }
+
+  static List<String> _weekDateLabels(DateTime now) {
+    return [
+      for (var i = 6; i >= 0; i--)
+        _formatMonthDay(now.subtract(Duration(days: i))),
+    ];
+  }
+
+  static String _formatMonthDay(DateTime date) => '${date.month}/${date.day}';
+}
+
+class _HealthMetric {
+  const _HealthMetric({
+    required this.label,
+    required this.value,
+    required this.unit,
+    required this.color,
+    required this.points,
+    required this.axisLabels,
+  });
+
+  final String label;
+  final String value;
+  final String unit;
+  final Color color;
+  final List<double> points;
+  final List<String> axisLabels;
+}
+
+class _HealthMetricCard extends StatelessWidget {
+  const _HealthMetricCard({required this.metric});
+
+  final _HealthMetric metric;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 198,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE2ECE6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Text(
+                  metric.label,
+                  style: const TextStyle(
+                    color: Color(0xFF24302A),
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Text(
+                metric.value,
+                style: TextStyle(
+                  color: metric.color,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  metric.unit,
+                  style: const TextStyle(
+                    color: Color(0xFF60736C),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Expanded(child: _HealthTrendChart(metric: metric)),
+          const SizedBox(height: 8),
+          _HealthChartAxis(labels: metric.axisLabels),
+        ],
+      ),
+    );
+  }
+}
+
+class _HealthChartAxis extends StatelessWidget {
+  const _HealthChartAxis({required this.labels});
+
+  final List<String> labels;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        for (final label in labels)
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Color(0xFF7B8A85),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _HealthTrendChart extends StatelessWidget {
+  const _HealthTrendChart({required this.metric});
+
+  final _HealthMetric metric;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _HealthTrendChartPainter(
+        points: metric.points,
+        color: metric.color,
+      ),
+      child: const SizedBox.expand(),
+    );
+  }
+}
+
+class _HealthTrendChartPainter extends CustomPainter {
+  const _HealthTrendChartPainter({required this.points, required this.color});
+
+  final List<double> points;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (points.isEmpty || size.width <= 0 || size.height <= 0) {
+      return;
+    }
+
+    final gridPaint = Paint()
+      ..color = const Color(0xFFE7EFEA)
+      ..strokeWidth = 1;
+    for (var i = 0; i < 4; i++) {
+      final y = size.height * i / 3;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    final minValue = points.reduce((a, b) => a < b ? a : b);
+    final maxValue = points.reduce((a, b) => a > b ? a : b);
+    final range = (maxValue - minValue).abs() < 0.01
+        ? 1.0
+        : maxValue - minValue;
+    final dx = points.length == 1 ? 0.0 : size.width / (points.length - 1);
+    Offset pointFor(int index) {
+      final normalized = (points[index] - minValue) / range;
+      return Offset(index * dx, size.height - normalized * size.height);
+    }
+
+    final fillPath = Path()..moveTo(0, size.height);
+    final linePath = Path();
+    for (var i = 0; i < points.length; i++) {
+      final point = pointFor(i);
+      if (i == 0) {
+        linePath.moveTo(point.dx, point.dy);
+        fillPath.lineTo(point.dx, point.dy);
+      } else {
+        linePath.lineTo(point.dx, point.dy);
+        fillPath.lineTo(point.dx, point.dy);
+      }
+    }
+    fillPath
+      ..lineTo(size.width, size.height)
+      ..close();
+
+    final fillPaint = Paint()
+      ..shader = ui.Gradient.linear(Offset.zero, Offset(0, size.height), [
+        color.withValues(alpha: 0.28),
+        color.withValues(alpha: 0.02),
+      ]);
+    canvas.drawPath(fillPath, fillPaint);
+
+    final linePaint = Paint()
+      ..color = color
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(linePath, linePaint);
+
+    final dotPaint = Paint()..color = color;
+    for (var i = 0; i < points.length; i++) {
+      canvas.drawCircle(pointFor(i), 3.5, dotPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _HealthTrendChartPainter oldDelegate) {
+    return oldDelegate.points != points || oldDelegate.color != color;
+  }
+}
+
 class DeepSeekChatPage extends StatefulWidget {
   const DeepSeekChatPage({super.key});
 
@@ -4340,37 +4894,184 @@ class MoodOption {
   final Color color;
 }
 
-class _StressSlider extends StatelessWidget {
-  const _StressSlider({
-    required this.value,
-    required this.activeColor,
-    required this.onChanged,
+class _HealthSyncButton extends StatelessWidget {
+  const _HealthSyncButton({
+    required this.isSyncing,
+    required this.summary,
+    required this.accentColor,
+    required this.onPressed,
+    required this.onSamplePressed,
   });
 
-  final double value;
-  final Color activeColor;
-  final ValueChanged<double> onChanged;
+  final bool isSyncing;
+  final String? summary;
+  final Color accentColor;
+  final VoidCallback onPressed;
+  final VoidCallback onSamplePressed;
 
   @override
   Widget build(BuildContext context) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
-      child: SliderTheme(
-        data: SliderTheme.of(context).copyWith(
-          activeTrackColor: activeColor,
-          inactiveTrackColor: Colors.white.withValues(alpha: 0.72),
-          thumbColor: Colors.white,
-          overlayColor: activeColor.withValues(alpha: 0.14),
-          trackHeight: 8,
-          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 13),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FilledButton.icon(
+          onPressed: isSyncing ? null : onPressed,
+          icon: isSyncing
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Icon(Icons.favorite_rounded, size: 18),
+          label: Text(isSyncing ? '同步中' : '同步健康数据'),
+          style: FilledButton.styleFrom(
+            backgroundColor: accentColor,
+            foregroundColor: Colors.white,
+            disabledBackgroundColor: accentColor.withValues(alpha: 0.5),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            shape: const StadiumBorder(),
+          ),
         ),
-        child: Slider(
-          min: 0,
-          max: 100,
-          divisions: 100,
-          value: value,
-          label: value.round().toString(),
-          onChanged: onChanged,
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: isSyncing ? null : onSamplePressed,
+          icon: const Icon(Icons.science_rounded, size: 18),
+          label: const Text('使用测试数据'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: accentColor,
+            side: BorderSide(color: accentColor.withValues(alpha: 0.45)),
+            backgroundColor: Colors.white.withValues(alpha: 0.82),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            shape: const StadiumBorder(),
+          ),
+        ),
+        if (summary != null && summary!.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            summary!,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: const Color(0xFF49635C),
+              fontWeight: FontWeight.w700,
+              height: 1.25,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _HealthSampleSheet extends StatelessWidget {
+  const _HealthSampleSheet({required this.samples});
+
+  final List<HealthStressSample> samples;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.72,
+        ),
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(18, 0, 18, 20),
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                '选择测试数据',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: const Color(0xFF24302A),
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            for (final sample in samples)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _HealthSampleTile(sample: sample),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HealthSampleTile extends StatelessWidget {
+  const _HealthSampleTile({required this.sample});
+
+  final HealthStressSample sample;
+
+  @override
+  Widget build(BuildContext context) {
+    final estimate = const HealthStressEstimator().sampleEstimate(sample);
+    final profile = StressProfile.fromValue(estimate.stressValue);
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => Navigator.of(context).pop(sample),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: profile.accentColor.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(21),
+                ),
+                child: Icon(profile.icon, color: profile.accentColor, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      sample.label,
+                      style: const TextStyle(
+                        color: Color(0xFF24302A),
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '压力 ${estimate.stressValue.round()} · ${profile.label}',
+                      style: const TextStyle(
+                        color: Color(0xFF52645E),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      sample.shortSummary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF6D7E78),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded),
+            ],
+          ),
         ),
       ),
     );
@@ -4523,5 +5224,298 @@ class StressProfile {
       imageIndex: 3,
       icon: Icons.health_and_safety_outlined,
     );
+  }
+}
+
+class HealthStressEstimator {
+  const HealthStressEstimator();
+
+  static const samples = [
+    HealthStressSample(
+      label: '平稳放松',
+      averageHeartRate: 62,
+      averageRestingHeartRate: 58,
+      averageHrv: 72,
+      steps: 8400,
+      sleepMinutes: 505,
+    ),
+    HealthStressSample(
+      label: '轻微紧绷',
+      averageHeartRate: 78,
+      averageRestingHeartRate: 64,
+      averageHrv: 42,
+      steps: 4600,
+      sleepMinutes: 430,
+    ),
+    HealthStressSample(
+      label: '压力偏高',
+      averageHeartRate: 88,
+      averageRestingHeartRate: 65,
+      averageHrv: 30,
+      steps: 2400,
+      sleepMinutes: 385,
+    ),
+    HealthStressSample(
+      label: '需要恢复',
+      averageHeartRate: 94,
+      averageRestingHeartRate: 66,
+      averageHrv: 24,
+      steps: 1280,
+      sleepMinutes: 335,
+    ),
+  ];
+
+  static const _types = [
+    HealthDataType.HEART_RATE,
+    HealthDataType.RESTING_HEART_RATE,
+    HealthDataType.HEART_RATE_VARIABILITY_SDNN,
+    HealthDataType.STEPS,
+    HealthDataType.SLEEP_ASLEEP,
+    HealthDataType.SLEEP_DEEP,
+    HealthDataType.SLEEP_LIGHT,
+    HealthDataType.SLEEP_REM,
+  ];
+
+  Future<HealthStressEstimate> estimate() async {
+    final health = Health();
+    await health.configure();
+
+    final availableTypes = _types
+        .where((type) => health.isDataTypeAvailable(type))
+        .toList();
+    if (availableTypes.isEmpty) {
+      throw const HealthStressPermissionException('当前设备暂不支持读取健康数据。');
+    }
+
+    final permissions = List<HealthDataAccess>.filled(
+      availableTypes.length,
+      HealthDataAccess.READ,
+    );
+    final authorized = await health.requestAuthorization(
+      availableTypes,
+      permissions: permissions,
+    );
+    if (!authorized) {
+      throw const HealthStressPermissionException('需要允许读取健康数据后才能同步压力值。');
+    }
+
+    final now = DateTime.now();
+    final start = now.subtract(const Duration(hours: 24));
+    final data = await health.getHealthDataFromTypes(
+      types: availableTypes,
+      startTime: start,
+      endTime: now,
+    );
+
+    final stats = HealthStressStats.fromData(data);
+    if (!stats.hasAnySignal) {
+      throw const HealthStressPermissionException(
+        '近 24 小时没有可用的心率、HRV、睡眠或步数数据。',
+      );
+    }
+
+    return HealthStressEstimate(
+      stressValue: stats.estimatedStress.clamp(0, 100).toDouble(),
+      summary: stats.summary,
+      stats: stats,
+    );
+  }
+
+  HealthStressEstimate sampleEstimate(HealthStressSample sample) {
+    final stats = HealthStressStats(
+      averageHeartRate: sample.averageHeartRate,
+      averageRestingHeartRate: sample.averageRestingHeartRate,
+      averageHrv: sample.averageHrv,
+      steps: sample.steps,
+      sleepMinutes: sample.sleepMinutes,
+    );
+    return HealthStressEstimate(
+      stressValue: stats.estimatedStress.clamp(0, 100).toDouble(),
+      summary: '测试数据 · ${sample.label}：${stats.summary}',
+      stats: stats,
+    );
+  }
+}
+
+class HealthStressSample {
+  const HealthStressSample({
+    required this.label,
+    required this.averageHeartRate,
+    required this.averageRestingHeartRate,
+    required this.averageHrv,
+    required this.steps,
+    required this.sleepMinutes,
+  });
+
+  final String label;
+  final double averageHeartRate;
+  final double averageRestingHeartRate;
+  final double averageHrv;
+  final double steps;
+  final double sleepMinutes;
+
+  String get shortSummary {
+    return '心率 ${averageHeartRate.round()} · HRV ${averageHrv.round()}ms · 睡眠 ${(sleepMinutes / 60).toStringAsFixed(1)}h';
+  }
+}
+
+class HealthStressEstimate {
+  const HealthStressEstimate({
+    required this.stressValue,
+    required this.summary,
+    required this.stats,
+  });
+
+  final double stressValue;
+  final String summary;
+  final HealthStressStats stats;
+}
+
+class HealthStressPermissionException implements Exception {
+  const HealthStressPermissionException(this.message);
+
+  final String message;
+}
+
+class HealthStressStats {
+  const HealthStressStats({
+    required this.averageHeartRate,
+    required this.averageRestingHeartRate,
+    required this.averageHrv,
+    required this.steps,
+    required this.sleepMinutes,
+  });
+
+  factory HealthStressStats.fromData(List<HealthDataPoint> points) {
+    final heartRates = <double>[];
+    final restingHeartRates = <double>[];
+    final hrvValues = <double>[];
+    double steps = 0;
+    double sleepMinutes = 0;
+
+    for (final point in points) {
+      final value = _numericValue(point);
+      if (value == null) {
+        continue;
+      }
+
+      switch (point.type) {
+        case HealthDataType.HEART_RATE:
+          heartRates.add(value);
+        case HealthDataType.RESTING_HEART_RATE:
+          restingHeartRates.add(value);
+        case HealthDataType.HEART_RATE_VARIABILITY_SDNN:
+          hrvValues.add(value);
+        case HealthDataType.STEPS:
+          steps += value;
+        case HealthDataType.SLEEP_ASLEEP:
+        case HealthDataType.SLEEP_DEEP:
+        case HealthDataType.SLEEP_LIGHT:
+        case HealthDataType.SLEEP_REM:
+          sleepMinutes += value;
+        default:
+          break;
+      }
+    }
+
+    return HealthStressStats(
+      averageHeartRate: _average(heartRates),
+      averageRestingHeartRate: _average(restingHeartRates),
+      averageHrv: _average(hrvValues),
+      steps: steps,
+      sleepMinutes: sleepMinutes.clamp(0, 10 * 60).toDouble(),
+    );
+  }
+
+  final double? averageHeartRate;
+  final double? averageRestingHeartRate;
+  final double? averageHrv;
+  final double steps;
+  final double sleepMinutes;
+
+  bool get hasAnySignal {
+    return averageHeartRate != null ||
+        averageRestingHeartRate != null ||
+        averageHrv != null ||
+        steps > 0 ||
+        sleepMinutes > 0;
+  }
+
+  double get estimatedStress {
+    var score = 35.0;
+
+    if (averageHeartRate != null && averageRestingHeartRate != null) {
+      final heartRateDelta = averageHeartRate! - averageRestingHeartRate!;
+      if (heartRateDelta >= 30) {
+        score += 25;
+      } else if (heartRateDelta >= 15) {
+        score += 15;
+      } else if (heartRateDelta >= 8) {
+        score += 8;
+      }
+    } else if (averageHeartRate != null) {
+      if (averageHeartRate! >= 95) {
+        score += 18;
+      } else if (averageHeartRate! >= 85) {
+        score += 10;
+      } else if (averageHeartRate! <= 65) {
+        score -= 5;
+      }
+    }
+
+    if (averageHrv != null) {
+      if (averageHrv! < 20) {
+        score += 25;
+      } else if (averageHrv! < 35) {
+        score += 15;
+      } else if (averageHrv! > 55) {
+        score -= 8;
+      }
+    }
+
+    if (sleepMinutes > 0) {
+      if (sleepMinutes < 360) {
+        score += 18;
+      } else if (sleepMinutes < 420) {
+        score += 8;
+      } else if (sleepMinutes >= 480) {
+        score -= 7;
+      }
+    }
+
+    if (steps > 0) {
+      if (steps < 1500) {
+        score += 8;
+      } else if (steps >= 7000) {
+        score -= 8;
+      }
+    }
+
+    return score;
+  }
+
+  String get summary {
+    final parts = <String>[
+      if (averageHeartRate != null) '心率 ${averageHeartRate!.round()}',
+      if (averageHrv != null) 'HRV ${averageHrv!.round()}ms',
+      if (sleepMinutes > 0) '睡眠 ${(sleepMinutes / 60).toStringAsFixed(1)}h',
+      if (steps > 0) '步数 ${steps.round()}',
+    ];
+    return parts.isEmpty ? '已同步健康数据。' : '已同步：${parts.join(' · ')}';
+  }
+
+  static double? _numericValue(HealthDataPoint point) {
+    final value = point.value;
+    if (value is NumericHealthValue) {
+      return value.numericValue.toDouble();
+    }
+    return null;
+  }
+
+  static double? _average(List<double> values) {
+    if (values.isEmpty) {
+      return null;
+    }
+    return values.reduce((a, b) => a + b) / values.length;
   }
 }

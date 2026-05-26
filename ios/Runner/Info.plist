@@ -26,6 +26,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSHealthShareUsageDescription</key>
+	<string>用于读取心率、HRV、睡眠和步数数据，帮助估算压力趋势。</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>用于在你允许时写入 moodland 的健康与情绪记录。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
