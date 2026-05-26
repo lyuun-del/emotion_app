@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Moodland iPhone with DeepSeek",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "F3052F28-95A0-4CF5-B26A-2C19CCE0D71B",
+      "toolArgs": [
+        "--dart-define-from-file=.env/deepseek.json"
+      ]
+    },
+    {
+      "name": "Moodland with DeepSeek",
+      "request": "launch",
+      "type": "dart",
+      "toolArgs": [
+        "--dart-define-from-file=.env/deepseek.json"
+      ]
+    }
+  ]
+}

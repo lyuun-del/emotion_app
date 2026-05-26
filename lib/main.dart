@@ -326,11 +326,7 @@ class _StressHomePageState extends State<StressHomePage>
                     case _IslandHotspotTarget.church:
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
-                          builder: (context) => IslandFeaturePage(
-                            title: hotspot.label,
-                            icon: hotspot.icon,
-                            description: '这里之后可以接 ${hotspot.label} 的互动、记录或任务。',
-                          ),
+                          builder: (context) => const FlowerReminderPage(),
                         ),
                       );
                     case _IslandHotspotTarget.garden:
@@ -1445,6 +1441,862 @@ class VillageLinkPage extends StatelessWidget {
   }
 }
 
+class FlowerReminderPage extends StatefulWidget {
+  const FlowerReminderPage({super.key});
+
+  @override
+  State<FlowerReminderPage> createState() => _FlowerReminderPageState();
+}
+
+class _FlowerReminderPageState extends State<FlowerReminderPage> {
+  static const _storageKey = 'flower_reminders';
+  static const _frequencies = ['每天', '工作日', '自定义'];
+
+  final _customMessageController = TextEditingController();
+  final _customWeekdays = <int>{1, 3, 5};
+
+  String _frequency = _frequencies.first;
+  String _selectedSubcategory = _reminderSubcategories.first;
+  TimeOfDay _selectedTime = const TimeOfDay(hour: 9, minute: 0);
+  _ReminderPhrase _selectedPhrase = _reminderPhrases.first;
+  List<_FlowerReminder> _reminders = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadReminders();
+  }
+
+  @override
+  void dispose() {
+    _customMessageController.dispose();
+    super.dispose();
+  }
+
+  List<_ReminderPhrase> get _filteredPhrases {
+    return _reminderPhrases
+        .where((phrase) => phrase.subcategory == _selectedSubcategory)
+        .toList();
+  }
+
+  Future<void> _loadReminders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_storageKey);
+    if (raw == null || raw.isEmpty) {
+      return;
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      return;
+    }
+
+    final reminders = decoded
+        .whereType<Map<String, Object?>>()
+        .map(_FlowerReminder.fromJson)
+        .toList();
+
+    if (!mounted) {
+      return;
+    }
+    setState(() => _reminders = reminders);
+  }
+
+  Future<void> _saveReminders() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _storageKey,
+      jsonEncode(_reminders.map((reminder) => reminder.toJson()).toList()),
+    );
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _selectedTime,
+    );
+    if (picked != null) {
+      setState(() => _selectedTime = picked);
+    }
+  }
+
+  Future<void> _addReminder() async {
+    final customMessage = _customMessageController.text.trim();
+    final message = customMessage.isEmpty
+        ? _selectedPhrase.text
+        : customMessage;
+
+    final reminder = _FlowerReminder(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      event: _selectedSubcategory,
+      category: _selectedPhrase.category,
+      subcategory: _selectedPhrase.subcategory,
+      message: message,
+      frequency: _frequency,
+      weekdays: _frequency == '自定义' ? (_customWeekdays.toList()..sort()) : [],
+      hour: _selectedTime.hour,
+      minute: _selectedTime.minute,
+      createdAt: DateTime.now(),
+    );
+
+    setState(() {
+      _reminders = [reminder, ..._reminders];
+      _customMessageController.clear();
+    });
+    await _saveReminders();
+
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('花时来信已收好。')));
+  }
+
+  Future<void> _deleteReminder(String id) async {
+    setState(() {
+      _reminders = _reminders.where((reminder) => reminder.id != id).toList();
+    });
+    await _saveReminders();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FFF4),
+      appBar: AppBar(
+        title: const Text('花时来信'),
+        backgroundColor: const Color(0xFFF8FFF4),
+        foregroundColor: const Color(0xFF24302A),
+        elevation: 0,
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
+          children: [
+            Text(
+              '灯塔会记住你交给它的小事，在合适的时间把花送到你手边。',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFF587171),
+                height: 1.4,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _ReminderPanel(
+              title: '提醒内容',
+              child: Column(
+                children: [
+                  _ReminderEventPicker(
+                    selectedSubcategory: _selectedSubcategory,
+                    onChanged: (subcategory) {
+                      final nextPhrase = _reminderPhrases.firstWhere(
+                        (phrase) => phrase.subcategory == subcategory,
+                      );
+                      setState(() {
+                        _selectedSubcategory = subcategory;
+                        _selectedPhrase = nextPhrase;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  _PhrasePicker(
+                    phrases: _filteredPhrases,
+                    selectedPhrase: _selectedPhrase,
+                    onChanged: (phrase) {
+                      setState(() => _selectedPhrase = phrase);
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  _ReminderTextField(
+                    controller: _customMessageController,
+                    label: '自定义提醒语句（可选）',
+                    hintText: '留空时使用上面的花园预设文案',
+                    maxLines: 3,
+                  ),
+                ],
+              ),
+            ),
+            _ReminderPanel(
+              title: '频率选项',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: '每天', label: Text('每天')),
+                      ButtonSegment(value: '工作日', label: Text('工作日')),
+                      ButtonSegment(value: '自定义', label: Text('自定义')),
+                    ],
+                    selected: {_frequency},
+                    onSelectionChanged: (values) {
+                      setState(() => _frequency = values.first);
+                    },
+                  ),
+                  if (_frequency == '自定义') ...[
+                    const SizedBox(height: 12),
+                    _WeekdaySelector(
+                      selectedWeekdays: _customWeekdays,
+                      onChanged: (weekday) {
+                        setState(() {
+                          if (_customWeekdays.contains(weekday)) {
+                            if (_customWeekdays.length > 1) {
+                              _customWeekdays.remove(weekday);
+                            }
+                          } else {
+                            _customWeekdays.add(weekday);
+                          }
+                        });
+                      },
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            _ReminderPanel(
+              title: '时间选择',
+              child: Column(
+                children: [
+                  Material(
+                    color: const Color(0xFFEFF8EF),
+                    borderRadius: BorderRadius.circular(8),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: _pickTime,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 14,
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.schedule_outlined,
+                              color: Color(0xFF5C9B72),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '静待花开',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                          color: const Color(0xFF24302A),
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '每天到点时，灯塔会把这封来信递给你。',
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: const Color(0xFF587171),
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              _formatTime(_selectedTime),
+                              style: Theme.of(context).textTheme.headlineSmall
+                                  ?.copyWith(
+                                    color: const Color(0xFF24302A),
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const _DoNotDisturbNote(),
+                ],
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: _addReminder,
+              icon: const Icon(Icons.local_florist_outlined),
+              label: const Text('保存提醒'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1C8E96),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                shape: const StadiumBorder(),
+              ),
+            ),
+            const SizedBox(height: 18),
+            _ReminderPanel(
+              title: '已收下的来信',
+              child: _reminders.isEmpty
+                  ? const _EmptyReminderState()
+                  : Column(
+                      children: [
+                        for (final reminder in _reminders)
+                          _SavedReminderCard(
+                            reminder: reminder,
+                            onDelete: () => _deleteReminder(reminder.id),
+                          ),
+                      ],
+                    ),
+            ),
+            _ReminderPanel(
+              title: '完整预设提醒语句速查表',
+              child: Column(
+                children: [
+                  for (final phrase in _reminderPhrases)
+                    _PhraseReferenceTile(phrase: phrase),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatTime(TimeOfDay time) {
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+}
+
+class _ReminderPanel extends StatelessWidget {
+  const _ReminderPanel({required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFF24302A),
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _ReminderTextField extends StatelessWidget {
+  const _ReminderTextField({
+    required this.controller,
+    required this.label,
+    required this.hintText,
+    required this.maxLines,
+  });
+
+  final TextEditingController controller;
+  final String label;
+  final String hintText;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      maxLines: maxLines,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hintText,
+        filled: true,
+        fillColor: const Color(0xFFF5FBF5),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+}
+
+class _ReminderEventPicker extends StatelessWidget {
+  const _ReminderEventPicker({
+    required this.selectedSubcategory,
+    required this.onChanged,
+  });
+
+  final String selectedSubcategory;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<String>(
+      initialValue: selectedSubcategory,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: '想让灯塔提醒你什么？',
+        filled: true,
+        fillColor: const Color(0xFFF5FBF5),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide.none,
+        ),
+      ),
+      items: [
+        for (final subcategory in _reminderSubcategories)
+          DropdownMenuItem(
+            value: subcategory,
+            child: Text(subcategory, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: (subcategory) {
+        if (subcategory != null) {
+          onChanged(subcategory);
+        }
+      },
+    );
+  }
+}
+
+class _PhrasePicker extends StatelessWidget {
+  const _PhrasePicker({
+    required this.phrases,
+    required this.selectedPhrase,
+    required this.onChanged,
+  });
+
+  final List<_ReminderPhrase> phrases;
+  final _ReminderPhrase selectedPhrase;
+  final ValueChanged<_ReminderPhrase> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<_ReminderPhrase>(
+      initialValue: selectedPhrase,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: '预设提醒语句',
+        filled: true,
+        fillColor: const Color(0xFFF5FBF5),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide.none,
+        ),
+      ),
+      items: [
+        for (final phrase in phrases)
+          DropdownMenuItem(
+            value: phrase,
+            child: Text(phrase.text, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: (phrase) {
+        if (phrase != null) {
+          onChanged(phrase);
+        }
+      },
+    );
+  }
+}
+
+class _WeekdaySelector extends StatelessWidget {
+  const _WeekdaySelector({
+    required this.selectedWeekdays,
+    required this.onChanged,
+  });
+
+  static const _labels = {
+    1: '一',
+    2: '二',
+    3: '三',
+    4: '四',
+    5: '五',
+    6: '六',
+    7: '日',
+  };
+
+  final Set<int> selectedWeekdays;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final entry in _labels.entries)
+          FilterChip(
+            label: Text('周${entry.value}'),
+            selected: selectedWeekdays.contains(entry.key),
+            selectedColor: const Color(0xFFDDF2E0),
+            checkmarkColor: const Color(0xFF5C9B72),
+            onSelected: (_) => onChanged(entry.key),
+          ),
+      ],
+    );
+  }
+}
+
+class _DoNotDisturbNote extends StatelessWidget {
+  const _DoNotDisturbNote();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8EA),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFF3DEB8)),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.bedtime_outlined, color: Color(0xFFA77A31), size: 20),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '晚上11点到早上7点，花会静静含苞，不打扰你休息。',
+              style: TextStyle(
+                color: Color(0xFF725829),
+                height: 1.35,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyReminderState extends StatelessWidget {
+  const _EmptyReminderState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 8),
+      child: Text(
+        '还没有来信。先写下一件想被温柔提醒的小事吧。',
+        style: TextStyle(
+          color: Color(0xFF587171),
+          height: 1.4,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _SavedReminderCard extends StatelessWidget {
+  const _SavedReminderCard({required this.reminder, required this.onDelete});
+
+  final _FlowerReminder reminder;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FCF7),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE4EFE5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.mark_email_unread_outlined,
+            color: Color(0xFF5C9B72),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  reminder.event,
+                  style: const TextStyle(
+                    color: Color(0xFF24302A),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${reminder.frequencyLabel} · ${reminder.timeLabel}',
+                  style: const TextStyle(
+                    color: Color(0xFF587171),
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  reminder.message,
+                  style: const TextStyle(
+                    color: Color(0xFF4E635B),
+                    height: 1.35,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: '删除提醒',
+            onPressed: onDelete,
+            icon: const Icon(Icons.close, size: 18),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhraseReferenceTile extends StatelessWidget {
+  const _PhraseReferenceTile({required this.phrase});
+
+  final _ReminderPhrase phrase;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFFEAF6EA),
+            ),
+            child: Text(
+              '${phrase.index}',
+              style: const TextStyle(
+                color: Color(0xFF5C9B72),
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${phrase.category} · ${phrase.subcategory}',
+                  style: const TextStyle(
+                    color: Color(0xFF24302A),
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  phrase.text,
+                  style: const TextStyle(
+                    color: Color(0xFF587171),
+                    height: 1.35,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FlowerReminder {
+  const _FlowerReminder({
+    required this.id,
+    required this.event,
+    required this.category,
+    required this.subcategory,
+    required this.message,
+    required this.frequency,
+    required this.weekdays,
+    required this.hour,
+    required this.minute,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String event;
+  final String category;
+  final String subcategory;
+  final String message;
+  final String frequency;
+  final List<int> weekdays;
+  final int hour;
+  final int minute;
+  final DateTime createdAt;
+
+  String get timeLabel {
+    return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+  }
+
+  String get frequencyLabel {
+    if (frequency != '自定义') {
+      return frequency;
+    }
+
+    const labels = {
+      1: '周一',
+      2: '周二',
+      3: '周三',
+      4: '周四',
+      5: '周五',
+      6: '周六',
+      7: '周日',
+    };
+    return weekdays.map((day) => labels[day]).whereType<String>().join('、');
+  }
+
+  Map<String, Object?> toJson() {
+    return {
+      'id': id,
+      'event': event,
+      'category': category,
+      'subcategory': subcategory,
+      'message': message,
+      'frequency': frequency,
+      'weekdays': weekdays,
+      'hour': hour,
+      'minute': minute,
+      'createdAt': createdAt.toIso8601String(),
+    };
+  }
+
+  factory _FlowerReminder.fromJson(Map<String, Object?> json) {
+    return _FlowerReminder(
+      id: json['id'] as String? ?? '',
+      event: json['event'] as String? ?? '',
+      category: json['category'] as String? ?? '',
+      subcategory: json['subcategory'] as String? ?? '',
+      message: json['message'] as String? ?? '',
+      frequency: json['frequency'] as String? ?? '每天',
+      weekdays:
+          (json['weekdays'] as List?)?.whereType<int>().toList() ?? const [],
+      hour: json['hour'] as int? ?? 9,
+      minute: json['minute'] as int? ?? 0,
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+          DateTime.now(),
+    );
+  }
+}
+
+class _ReminderPhrase {
+  const _ReminderPhrase(this.index, this.category, this.subcategory, this.text);
+
+  final int index;
+  final String category;
+  final String subcategory;
+  final String text;
+}
+
+const _reminderPhrases = [
+  _ReminderPhrase(1, '生活小事', '喝水', '该喝口水啦。你比任何一朵花，都更需要水的滋养。'),
+  _ReminderPhrase(2, '生活小事', '喝水', '喝点水吧。身体里的每片叶子都在等这口水。'),
+  _ReminderPhrase(3, '生活小事', '喝水', '倒杯水，站在窗边喝。喝水的时候顺便看看天。'),
+  _ReminderPhrase(4, '生活小事', '吃饭', '到点了。不管忙不忙，先吃饭。'),
+  _ReminderPhrase(5, '生活小事', '吃饭', '空腹的时候，情绪更容易摇晃。去吃点东西吧。'),
+  _ReminderPhrase(6, '生活小事', '吃药', '该吃药了。这颗小药片，是你今天给自己的第一个照顾。'),
+  _ReminderPhrase(7, '生活小事', '吃药', '药在等你。吃完它，然后继续做今天的事。'),
+  _ReminderPhrase(8, '生活小事', '吃药', '别跳过。这颗药是你和身体之间的约定。'),
+  _ReminderPhrase(9, '生活小事', '休息', '起来走两步。椅子不会想你的。'),
+  _ReminderPhrase(10, '生活小事', '休息', '伸个懒腰。让肩膀从耳朵旁边回到它该在的地方。'),
+  _ReminderPhrase(11, '生活小事', '睡眠', '很晚了。昙花要开了，你也该把自己裹进被子里。'),
+  _ReminderPhrase(12, '生活小事', '睡眠', '手机放下。今晚的世界不需要你操心，它会自己转。'),
+  _ReminderPhrase(13, '生活小事', '运动', '站起来，扭一下脖子。你不动，身体会替你想办法。'),
+  _ReminderPhrase(14, '生活小事', '运动', '今天走了多少步？不够的话，去楼下遛一圈。'),
+  _ReminderPhrase(15, '情绪赋能', '外界评价', '别人的评价只是一阵风。你是那棵扎根的树。'),
+  _ReminderPhrase(16, '情绪赋能', '外界评价', '你不是别人嘴里的你。你是你花园里所有花的总和。'),
+  _ReminderPhrase(17, '情绪赋能', '自我肯定', '你已经做得很好了。这句话不需要证明，只需要相信。'),
+  _ReminderPhrase(18, '情绪赋能', '自我肯定', '今天，你做了一件又一件的事。光是撑到现在，就已经很厉害了。'),
+  _ReminderPhrase(19, '情绪赋能', '完美主义', '花园里最好看的，往往是那些歪着头开的花。'),
+  _ReminderPhrase(20, '情绪赋能', '完美主义', '今天不需要完美。及格就好。80分已经足够。'),
+  _ReminderPhrase(21, '情绪赋能', '接纳敏感', '你的敏感不是弱点。你能察觉到别人忽略的东西，这是天赋。'),
+  _ReminderPhrase(22, '情绪赋能', '情绪合法性', '今天不开心没关系。向日葵也有低下头的时候。'),
+  _ReminderPhrase(23, '情绪赋能', '情绪合法性', '愤怒在保护你心里重要的东西。别急着赶走它。'),
+  _ReminderPhrase(24, '温柔时刻', '当下', '停一下。看看窗外。此刻的天空只为你存在。'),
+  _ReminderPhrase(25, '温柔时刻', '当下', '三秒。就三秒。听一下周围的声音。你活着，这件事本身就很了不起。'),
+  _ReminderPhrase(26, '温柔时刻', '放空', '今天不需要有意义，只需要存在。像绿萝一样。'),
+  _ReminderPhrase(27, '温柔时刻', '放空', '发呆不是浪费时间。它是在回收自己。'),
+  _ReminderPhrase(28, '温柔时刻', '自我价值', '你是一朵会走路的花。别忘了你本来就会开。'),
+  _ReminderPhrase(29, '温柔时刻', '自我价值', '你的存在本身就有价值。不需要用成就来证明。'),
+  _ReminderPhrase(30, '温柔时刻', '迷茫', '暂时迷路没关系。迷雾终会散去。'),
+  _ReminderPhrase(31, '温柔时刻', '迷茫', '不需要马上知道所有答案。等着就行。'),
+  _ReminderPhrase(32, '温柔时刻', '放下', '蒲公英让风带走种子。你也可以让风带走今天的重负。'),
+  _ReminderPhrase(33, '温柔时刻', '放下', '能放下，比能拿起更需要勇气。你今天放下什么了吗？'),
+  _ReminderPhrase(34, '关系边界', '边界', '你有权利说不。红玫瑰的刺不是用来伤人的，是保护自己的。'),
+  _ReminderPhrase(35, '关系边界', '边界', '不解释也没关系。你的不，本身就是一个完整的句子。'),
+  _ReminderPhrase(36, '关系边界', '不孤独', '你今天不是一个人。在这座城市里，有很多人和你一样在深呼吸。'),
+  _ReminderPhrase(37, '关系边界', '沟通', '有句话，如果你想说，就去说。如果你不想说，也可以沉默。'),
+  _ReminderPhrase(38, '工作学习', '行动', '不用想太多。先做五分钟。五分钟之后，你想停就停。'),
+  _ReminderPhrase(39, '工作学习', '行动', '最难的不是做整件事，是开始的那一秒。这一秒，来吧。'),
+  _ReminderPhrase(40, '工作学习', '平衡', '你不需要一直工作。连太阳都有下山的时候。'),
+  _ReminderPhrase(41, '工作学习', '平衡', '休息是工作的一部分，不是工作的反面。'),
+];
+
+const _reminderSubcategories = [
+  '喝水',
+  '吃饭',
+  '吃药',
+  '休息',
+  '睡眠',
+  '运动',
+  '外界评价',
+  '自我肯定',
+  '完美主义',
+  '接纳敏感',
+  '情绪合法性',
+  '当下',
+  '放空',
+  '自我价值',
+  '迷茫',
+  '放下',
+  '边界',
+  '不孤独',
+  '沟通',
+  '行动',
+  '平衡',
+];
+
 class _NewUserQuestionsPage extends StatefulWidget {
   const _NewUserQuestionsPage();
 
@@ -1935,6 +2787,9 @@ class DeepSeekChatPage extends StatefulWidget {
 
 class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
   static const _chatHistoryKey = 'lighthouse_deepseek_chat_history';
+  static const _chatConversationsKey = 'lighthouse_deepseek_conversations';
+  static const _activeChatConversationIdKey =
+      'lighthouse_active_chat_conversation_id';
   static const _newUserQuestionAnswersKey = 'new_user_question_answers';
   static const _apiKey = String.fromEnvironment('DEEPSEEK_API_KEY');
   static const _model = String.fromEnvironment(
@@ -1945,8 +2800,13 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
     'DEEPSEEK_API_URL',
     defaultValue: 'https://api.deepseek.com/chat/completions',
   );
+  static const _initialAssistantMessage = _ChatMessage(
+    role: _ChatRole.assistant,
+    content: '你好，我是灯塔里的 moodland 助手。今天想聊些什么？',
+  );
 
   final _messages = <_ChatMessage>[];
+  final _conversations = <_ChatConversation>[];
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   late final _DeepSeekChatClient _client;
@@ -1955,6 +2815,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
   bool _isLoadingHistory = true;
 
   bool get _isConfigured => _apiKey.isNotEmpty && _model.isNotEmpty;
+  String? _activeConversationId;
 
   @override
   void initState() {
@@ -2040,16 +2901,30 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
   }
 
   void _showConfigurationHint() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('请用 --dart-define 配置 DEEPSEEK_API_KEY')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('灯塔对话还没有完成本机配置')));
   }
 
   Future<void> _loadChatHistory() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedHistory = prefs.getString(_chatHistoryKey);
+    final savedConversations = prefs.getString(_chatConversationsKey);
+    final legacySavedHistory = prefs.getString(_chatHistoryKey);
+    final savedActiveConversationId = prefs.getString(
+      _activeChatConversationIdKey,
+    );
     final savedQuestionAnswers = prefs.getString(_newUserQuestionAnswersKey);
-    final loadedMessages = _decodeMessages(savedHistory);
+    final decodedConversations = _decodeConversations(savedConversations);
+    final loadedConversations = decodedConversations.isNotEmpty
+        ? decodedConversations
+        : _migrateLegacyConversation(legacySavedHistory);
+    final conversations = loadedConversations.isEmpty
+        ? [_createNewConversation()]
+        : loadedConversations;
+    final activeConversation = conversations.firstWhere(
+      (conversation) => conversation.id == savedActiveConversationId,
+      orElse: () => conversations.first,
+    );
 
     if (!mounted) {
       return;
@@ -2057,29 +2932,198 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
 
     setState(() {
       _userProfileContext = _formatUserQuestionAnswers(savedQuestionAnswers);
+      _activeConversationId = activeConversation.id;
+      _conversations
+        ..clear()
+        ..addAll(conversations);
       _messages
         ..clear()
-        ..addAll(
-          loadedMessages.isEmpty
-              ? [
-                  const _ChatMessage(
-                    role: _ChatRole.assistant,
-                    content: '你好，我是灯塔里的 moodland 助手。今天想聊些什么？',
-                  ),
-                ]
-              : loadedMessages,
-        );
+        ..addAll(activeConversation.messages);
       _isLoadingHistory = false;
     });
+    await _saveConversations();
     _scrollToBottom();
   }
 
   Future<void> _saveChatHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _chatHistoryKey,
-      jsonEncode(_messages.map((message) => message.toJson()).toList()),
+    final activeConversationId = _activeConversationId;
+    if (activeConversationId == null) {
+      return;
+    }
+
+    final index = _conversations.indexWhere(
+      (conversation) => conversation.id == activeConversationId,
     );
+    if (index == -1) {
+      return;
+    }
+
+    _conversations[index] = _conversations[index].copyWith(
+      title: _titleForMessages(_messages),
+      messages: List<_ChatMessage>.from(_messages),
+      updatedAt: DateTime.now(),
+    );
+    _sortConversations();
+    await _saveConversations();
+  }
+
+  Future<void> _saveConversations() async {
+    final prefs = await SharedPreferences.getInstance();
+    final activeConversationId = _activeConversationId;
+    if (activeConversationId != null) {
+      await prefs.setString(_activeChatConversationIdKey, activeConversationId);
+    }
+    await prefs.setString(
+      _chatConversationsKey,
+      jsonEncode(
+        _conversations.map((conversation) => conversation.toJson()).toList(),
+      ),
+    );
+  }
+
+  Future<void> _startNewChat() async {
+    final nextConversation = _createNewConversation();
+    if (!mounted) {
+      return;
+    }
+    _controller.clear();
+    setState(() {
+      _isSending = false;
+      _activeConversationId = nextConversation.id;
+      _conversations.insert(0, nextConversation);
+      _messages
+        ..clear()
+        ..addAll(nextConversation.messages);
+    });
+    await _saveConversations();
+    _scrollToBottom();
+  }
+
+  Future<void> _showChatHistory() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFF5FBFA),
+      builder: (context) {
+        return _ChatHistorySheet(
+          conversations: _conversations,
+          activeConversationId: _activeConversationId,
+          onOpen: (conversation) {
+            Navigator.of(context).pop();
+            _openConversation(conversation);
+          },
+          onDelete: (conversation) {
+            _deleteConversation(conversation.id);
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _openConversation(_ChatConversation conversation) async {
+    _controller.clear();
+    setState(() {
+      _isSending = false;
+      _activeConversationId = conversation.id;
+      _messages
+        ..clear()
+        ..addAll(conversation.messages);
+    });
+    await _saveConversations();
+    _scrollToBottom();
+  }
+
+  Future<void> _deleteConversation(String conversationId) async {
+    final wasActive = conversationId == _activeConversationId;
+    setState(() {
+      _conversations.removeWhere(
+        (conversation) => conversation.id == conversationId,
+      );
+      if (_conversations.isEmpty) {
+        final nextConversation = _createNewConversation();
+        _conversations.add(nextConversation);
+        _activeConversationId = nextConversation.id;
+        _messages
+          ..clear()
+          ..addAll(nextConversation.messages);
+      } else if (wasActive) {
+        final nextConversation = _conversations.first;
+        _activeConversationId = nextConversation.id;
+        _messages
+          ..clear()
+          ..addAll(nextConversation.messages);
+      }
+    });
+    await _saveConversations();
+    _scrollToBottom();
+  }
+
+  _ChatConversation _createNewConversation({List<_ChatMessage>? messages}) {
+    final conversationMessages = messages == null || messages.isEmpty
+        ? [_initialAssistantMessage]
+        : messages;
+    final now = DateTime.now();
+    return _ChatConversation(
+      id: now.microsecondsSinceEpoch.toString(),
+      title: _titleForMessages(conversationMessages),
+      messages: conversationMessages,
+      updatedAt: now,
+    );
+  }
+
+  List<_ChatConversation> _migrateLegacyConversation(String? savedHistory) {
+    final messages = _decodeMessages(savedHistory);
+    if (messages.isEmpty) {
+      return const [];
+    }
+    return [_createNewConversation(messages: messages)];
+  }
+
+  List<_ChatConversation> _decodeConversations(String? savedConversations) {
+    if (savedConversations == null || savedConversations.isEmpty) {
+      return const [];
+    }
+
+    try {
+      final data = jsonDecode(savedConversations);
+      if (data is! List) {
+        return const [];
+      }
+
+      final conversations = [
+        for (final item in data)
+          if (item is Map<String, dynamic>) _ChatConversation.fromJson(item),
+      ];
+      conversations.removeWhere(
+        (conversation) => conversation.messages.isEmpty,
+      );
+      conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      return conversations;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  void _sortConversations() {
+    _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  }
+
+  String _titleForMessages(List<_ChatMessage> messages) {
+    String? firstUserMessage;
+    for (final message in messages) {
+      final content = message.content.trim();
+      if (message.role == _ChatRole.user && content.isNotEmpty) {
+        firstUserMessage = content;
+        break;
+      }
+    }
+    if (firstUserMessage == null) {
+      return '新对话';
+    }
+    return firstUserMessage.length > 18
+        ? '${firstUserMessage.substring(0, 18)}...'
+        : firstUserMessage;
   }
 
   List<_ChatMessage> _decodeMessages(String? savedHistory) {
@@ -2164,6 +3208,19 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
         backgroundColor: backgroundColor,
         foregroundColor: const Color(0xFF24302A),
         elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: '查看旧对话',
+            onPressed: _isLoadingHistory ? null : _showChatHistory,
+            icon: const Icon(Icons.history_rounded),
+          ),
+          IconButton(
+            tooltip: '开启新对话',
+            onPressed: _isLoadingHistory ? null : _startNewChat,
+            icon: const Icon(Icons.add_comment_rounded),
+          ),
+          const SizedBox(width: 6),
+        ],
       ),
       body: SafeArea(
         child: Column(
@@ -2179,7 +3236,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
                   border: Border.all(color: const Color(0xFFFFD36A)),
                 ),
                 child: const Text(
-                  'DeepSeek 尚未配置。启动时传入 DEEPSEEK_API_KEY 后即可对话。',
+                  '灯塔对话还没有完成本机配置，配置完成后即可使用。',
                   style: TextStyle(
                     color: Color(0xFF77520A),
                     fontWeight: FontWeight.w700,
@@ -2279,6 +3336,212 @@ class _ChatMessage {
 
   Map<String, String> toJson() {
     return {'role': role.name, 'content': content};
+  }
+}
+
+class _ChatConversation {
+  const _ChatConversation({
+    required this.id,
+    required this.title,
+    required this.messages,
+    required this.updatedAt,
+  });
+
+  factory _ChatConversation.fromJson(Map<String, dynamic> json) {
+    final rawMessages = json['messages'];
+    final parsedUpdatedAt = DateTime.tryParse(
+      json['updatedAt']?.toString() ?? '',
+    );
+
+    return _ChatConversation(
+      id: json['id']?.toString() ?? '',
+      title: json['title']?.toString() ?? '旧对话',
+      messages: [
+        if (rawMessages is List)
+          for (final item in rawMessages)
+            if (item is Map<String, dynamic>) _ChatMessage.fromJson(item),
+      ],
+      updatedAt: parsedUpdatedAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+    );
+  }
+
+  final String id;
+  final String title;
+  final List<_ChatMessage> messages;
+  final DateTime updatedAt;
+
+  _ChatConversation copyWith({
+    String? title,
+    List<_ChatMessage>? messages,
+    DateTime? updatedAt,
+  }) {
+    return _ChatConversation(
+      id: id,
+      title: title ?? this.title,
+      messages: messages ?? this.messages,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  Map<String, Object?> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'messages': messages.map((message) => message.toJson()).toList(),
+      'updatedAt': updatedAt.toIso8601String(),
+    };
+  }
+}
+
+class _ChatHistorySheet extends StatefulWidget {
+  const _ChatHistorySheet({
+    required this.conversations,
+    required this.activeConversationId,
+    required this.onOpen,
+    required this.onDelete,
+  });
+
+  final List<_ChatConversation> conversations;
+  final String? activeConversationId;
+  final ValueChanged<_ChatConversation> onOpen;
+  final ValueChanged<_ChatConversation> onDelete;
+
+  @override
+  State<_ChatHistorySheet> createState() => _ChatHistorySheetState();
+}
+
+class _ChatHistorySheetState extends State<_ChatHistorySheet> {
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.72,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+              child: Text(
+                '对话记录',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: const Color(0xFF24302A),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                itemBuilder: (context, index) {
+                  final conversation = widget.conversations[index];
+                  final isActive =
+                      conversation.id == widget.activeConversationId;
+                  return _ChatHistoryTile(
+                    conversation: conversation,
+                    isActive: isActive,
+                    onOpen: () => widget.onOpen(conversation),
+                    onDelete: () {
+                      widget.onDelete(conversation);
+                      if (mounted) {
+                        setState(() {});
+                      }
+                    },
+                  );
+                },
+                separatorBuilder: (context, index) => const SizedBox(height: 8),
+                itemCount: widget.conversations.length,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatHistoryTile extends StatelessWidget {
+  const _ChatHistoryTile({
+    required this.conversation,
+    required this.isActive,
+    required this.onOpen,
+    required this.onDelete,
+  });
+
+  final _ChatConversation conversation;
+  final bool isActive;
+  final VoidCallback onOpen;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final messageCount = conversation.messages.length;
+    return Material(
+      color: isActive ? const Color(0xFFE2F3F0) : Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onOpen,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C8E96).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(19),
+                ),
+                child: const Icon(
+                  Icons.forum_rounded,
+                  color: Color(0xFF1C8E96),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      conversation.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF24302A),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${_formatChatTime(conversation.updatedAt)} · $messageCount 条消息',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF6C7F78),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '删除对话',
+                onPressed: onDelete,
+                icon: const Icon(Icons.delete_outline_rounded),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _formatChatTime(DateTime dateTime) {
+    final local = dateTime.toLocal();
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+    return '${local.month}/${local.day} ${twoDigits(local.hour)}:${twoDigits(local.minute)}';
   }
 }
 
