@@ -164,12 +164,32 @@ void main() {
       expect(find.text('我的主页'), findsOneWidget);
       expect(find.text('个人信息'), findsOneWidget);
       expect(find.text('软件设置'), findsOneWidget);
+      expect(find.text('灯塔头像'), findsOneWidget);
+      expect(find.text('更改'), findsOneWidget);
       expect(find.text('隐私与权限'), findsOneWidget);
       expect(find.text('本地数据'), findsOneWidget);
       expect(find.text('应用版本'), findsOneWidget);
       expect(find.byIcon(Icons.monitor_heart_rounded), findsNothing);
     },
   );
+
+  testWidgets('user page can show restore default lighthouse avatar action', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'new_user_questions_completed': true,
+      'lighthouse_assistant_avatar_path': '/tmp/custom_lighthouse.png',
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: UserHomePage(currentEstimate: null)),
+    );
+    await tester.pump();
+
+    expect(find.text('灯塔头像'), findsOneWidget);
+    expect(find.text('更改'), findsOneWidget);
+    expect(find.text('恢复默认'), findsOneWidget);
+  });
 
   testWidgets('deepseek chat page starts a new conversation', (tester) async {
     SharedPreferences.setMockInitialValues({
@@ -187,6 +207,16 @@ void main() {
 
     expect(find.text('旧消息'), findsNothing);
     expect(find.text('你好，我是灯塔里的 moodland 助手。今天想聊些什么？'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Image &&
+            widget.image is AssetImage &&
+            (widget.image as AssetImage).assetName ==
+                'assets/images/lighthouse_lamp_avatar.png',
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('deepseek chat page shows and deletes old conversations', (

@@ -1,11 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:health/health.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+const _lighthouseAvatarAsset = 'assets/images/lighthouse_lamp_avatar.png';
+const _lighthouseAvatarPathKey = 'lighthouse_assistant_avatar_path';
 
 void main() {
   runApp(const MoodStressApp());
@@ -3030,7 +3036,9 @@ class _UserHomePageState extends State<UserHomePage> {
   static const _newUserQuestionAnswersKey = 'new_user_question_answers';
 
   Map<String, dynamic>? _answers;
+  String? _assistantAvatarPath;
   bool _isLoading = true;
+  bool _isPickingAssistantAvatar = false;
 
   @override
   void initState() {
@@ -3041,6 +3049,7 @@ class _UserHomePageState extends State<UserHomePage> {
   Future<void> _loadProfile() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_newUserQuestionAnswersKey);
+    final assistantAvatarPath = prefs.getString(_lighthouseAvatarPathKey);
     Map<String, dynamic>? answers;
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
@@ -3053,8 +3062,68 @@ class _UserHomePageState extends State<UserHomePage> {
     }
     setState(() {
       _answers = answers;
+      _assistantAvatarPath = assistantAvatarPath;
       _isLoading = false;
     });
+  }
+
+  Future<void> _changeAssistantAvatar() async {
+    if (_isPickingAssistantAvatar) {
+      return;
+    }
+
+    setState(() => _isPickingAssistantAvatar = true);
+    try {
+      final image = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 720,
+        imageQuality: 88,
+        requestFullMetadata: false,
+      );
+      if (image == null) {
+        _showUserHomeMessage('没有选择新头像');
+        return;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_lighthouseAvatarPathKey, image.path);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _assistantAvatarPath = image.path);
+      _showUserHomeMessage('灯塔头像已更新');
+    } on PlatformException catch (error) {
+      _showUserHomeMessage('无法打开相册：${error.message ?? error.code}');
+    } catch (_) {
+      _showUserHomeMessage('无法打开相册，请检查相册权限后再试。');
+    } finally {
+      if (mounted) {
+        setState(() => _isPickingAssistantAvatar = false);
+      }
+    }
+  }
+
+  Future<void> _resetAssistantAvatar() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_lighthouseAvatarPathKey);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _assistantAvatarPath = null);
+    _showUserHomeMessage('已恢复默认灯塔头像');
+  }
+
+  void _showUserHomeMessage(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   String _answerText(String key, {String fallback = '未填写'}) {
@@ -3122,21 +3191,28 @@ class _UserHomePageState extends State<UserHomePage> {
                 ),
               ],
             ),
-            const _UserHomeSection(
+            _UserHomeSection(
               title: '软件设置',
               children: [
+                _AssistantAvatarSettingsTile(
+                  avatarPath: _assistantAvatarPath,
+                  isPicking: _isPickingAssistantAvatar,
+                  onChange: _changeAssistantAvatar,
+                  onReset: _resetAssistantAvatar,
+                ),
+                const SizedBox(height: 10),
                 _SettingsInfoTile(
                   icon: Icons.privacy_tip_outlined,
                   title: '隐私与权限',
                   subtitle: '健康数据只在获得授权后读取，用于估算压力趋势。',
                 ),
-                SizedBox(height: 10),
+                const SizedBox(height: 10),
                 _SettingsInfoTile(
                   icon: Icons.storage_outlined,
                   title: '本地数据',
                   subtitle: '对话、提醒和问卷信息保存在本机，用于恢复你的使用状态。',
                 ),
-                SizedBox(height: 10),
+                const SizedBox(height: 10),
                 _SettingsInfoTile(
                   icon: Icons.info_outline_rounded,
                   title: '应用版本',
@@ -3352,6 +3428,139 @@ class _SettingsInfoTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _AssistantAvatarSettingsTile extends StatelessWidget {
+  const _AssistantAvatarSettingsTile({
+    required this.avatarPath,
+    required this.isPicking,
+    required this.onChange,
+    required this.onReset,
+  });
+
+  final String? avatarPath;
+  final bool isPicking;
+  final VoidCallback onChange;
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasCustomAvatar = avatarPath != null && avatarPath!.isNotEmpty;
+
+    return Material(
+      color: const Color(0xFFF7FCF7),
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: isPicking ? null : onChange,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE4EFE5)),
+          ),
+          child: Row(
+            children: [
+              _LighthouseAvatar(path: avatarPath, radius: 24),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '灯塔头像',
+                      style: TextStyle(
+                        color: Color(0xFF24302A),
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      '更改灯塔对话里 AI 显示的头像。',
+                      style: TextStyle(
+                        color: Color(0xFF60736C),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isPicking)
+                const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.4),
+                )
+              else
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  alignment: WrapAlignment.end,
+                  children: [
+                    TextButton.icon(
+                      onPressed: onChange,
+                      icon: const Icon(Icons.photo_library_outlined, size: 18),
+                      label: const Text('更改'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF5C9B72),
+                        textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                    if (hasCustomAvatar)
+                      TextButton.icon(
+                        onPressed: onReset,
+                        icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                        label: const Text('恢复默认'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFF8A6721),
+                          textStyle: const TextStyle(
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LighthouseAvatar extends StatelessWidget {
+  const _LighthouseAvatar({required this.path, required this.radius});
+
+  final String? path;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final customPath = path;
+    final diameter = radius * 2;
+    final fallback = Image.asset(
+      _lighthouseAvatarAsset,
+      width: diameter,
+      height: diameter,
+      fit: BoxFit.cover,
+    );
+
+    return ClipOval(
+      child: SizedBox(
+        width: diameter,
+        height: diameter,
+        child: customPath == null || customPath.isEmpty
+            ? fallback
+            : Image.file(
+                File(customPath),
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => fallback,
+              ),
       ),
     );
   }
@@ -4130,6 +4339,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
   final _scrollController = ScrollController();
   late final _DeepSeekChatClient _client;
   String? _userProfileContext;
+  String? _assistantAvatarPath;
   bool _isSending = false;
   bool _isLoadingHistory = true;
 
@@ -4233,6 +4443,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
       _activeChatConversationIdKey,
     );
     final savedQuestionAnswers = prefs.getString(_newUserQuestionAnswersKey);
+    final assistantAvatarPath = prefs.getString(_lighthouseAvatarPathKey);
     final decodedConversations = _decodeConversations(savedConversations);
     final loadedConversations = decodedConversations.isNotEmpty
         ? decodedConversations
@@ -4251,6 +4462,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
 
     setState(() {
       _userProfileContext = _formatUserQuestionAnswers(savedQuestionAnswers);
+      _assistantAvatarPath = assistantAvatarPath;
       _activeConversationId = activeConversation.id;
       _conversations
         ..clear()
@@ -4591,7 +4803,10 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
                       controller: _scrollController,
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
                       itemBuilder: (context, index) {
-                        return _ChatBubble(message: _messages[index]);
+                        return _ChatBubble(
+                          message: _messages[index],
+                          assistantAvatarPath: _assistantAvatarPath,
+                        );
                       },
                       separatorBuilder: (context, index) =>
                           const SizedBox(height: 10),
@@ -4887,9 +5102,10 @@ class _ChatHistoryTile extends StatelessWidget {
 }
 
 class _ChatBubble extends StatelessWidget {
-  const _ChatBubble({required this.message});
+  const _ChatBubble({required this.message, required this.assistantAvatarPath});
 
   final _ChatMessage message;
+  final String? assistantAvatarPath;
 
   @override
   Widget build(BuildContext context) {
@@ -4897,34 +5113,51 @@ class _ChatBubble extends StatelessWidget {
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.78,
-        ),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: isUser ? const Color(0xFF1C8E96) : Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.05),
-                blurRadius: 14,
-                offset: const Offset(0, 6),
+      child: Row(
+        mainAxisAlignment: isUser
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (!isUser) ...[
+            _LighthouseAvatar(path: assistantAvatarPath, radius: 18),
+            const SizedBox(width: 8),
+          ],
+          Flexible(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(context).width * 0.72,
               ),
-            ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: Text(
-              message.content,
-              style: TextStyle(
-                color: isUser ? Colors.white : const Color(0xFF24302A),
-                height: 1.45,
-                fontWeight: FontWeight.w600,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: isUser ? const Color(0xFF1C8E96) : Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  child: Text(
+                    message.content,
+                    style: TextStyle(
+                      color: isUser ? Colors.white : const Color(0xFF24302A),
+                      height: 1.45,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
