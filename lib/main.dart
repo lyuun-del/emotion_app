@@ -3208,19 +3208,6 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
         backgroundColor: backgroundColor,
         foregroundColor: const Color(0xFF24302A),
         elevation: 0,
-        actions: [
-          IconButton(
-            tooltip: '查看旧对话',
-            onPressed: _isLoadingHistory ? null : _showChatHistory,
-            icon: const Icon(Icons.history_rounded),
-          ),
-          IconButton(
-            tooltip: '开启新对话',
-            onPressed: _isLoadingHistory ? null : _startNewChat,
-            icon: const Icon(Icons.add_comment_rounded),
-          ),
-          const SizedBox(width: 6),
-        ],
       ),
       body: SafeArea(
         child: Column(
@@ -3243,6 +3230,41 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
                   ),
                 ),
               ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _isLoadingHistory ? null : _showChatHistory,
+                      icon: const Icon(Icons.history_rounded, size: 18),
+                      label: const Text('对话记录'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF1C8E96),
+                        side: const BorderSide(color: Color(0xFFB7D9D3)),
+                        backgroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: const StadiumBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _isLoadingHistory ? null : _startNewChat,
+                      icon: const Icon(Icons.add_comment_rounded, size: 18),
+                      label: const Text('新对话'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: accentColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: const StadiumBorder(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             Expanded(
               child: _isLoadingHistory
                   ? const Center(child: CircularProgressIndicator())

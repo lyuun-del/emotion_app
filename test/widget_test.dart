@@ -52,9 +52,10 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: DeepSeekChatPage()));
     await tester.pump();
 
+    expect(find.text('对话记录'), findsOneWidget);
     expect(find.text('旧消息'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('开启新对话'));
+    await tester.tap(find.text('新对话'));
     await tester.pump();
 
     expect(find.text('旧消息'), findsNothing);
@@ -73,9 +74,9 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: DeepSeekChatPage()));
     await tester.pump();
 
-    await tester.tap(find.byTooltip('开启新对话'));
+    await tester.tap(find.text('新对话'));
     await tester.pump();
-    await tester.tap(find.byTooltip('查看旧对话'));
+    await tester.tap(find.text('对话记录'));
     await tester.pumpAndSettle();
 
     expect(find.text('旧对话'), findsOneWidget);
