@@ -1,6 +1,6 @@
 {
-    "name": "mood_stress_app",
-    "short_name": "mood_stress_app",
+    "name": "moodland",
+    "short_name": "moodland",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
