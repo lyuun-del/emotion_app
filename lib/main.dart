@@ -386,8 +386,9 @@ class _StressHomePageState extends State<StressHomePage>
                     case _IslandHotspotTarget.hillHouse:
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
-                          builder: (context) =>
-                              CabinPage(currentEstimate: _latestHealthEstimate),
+                          builder: (context) => HealthDataDashboardPage(
+                            currentEstimate: _latestHealthEstimate,
+                          ),
                         ),
                       );
                     case _IslandHotspotTarget.lighthouse:
@@ -1819,15 +1820,7 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
                       ],
                     ),
             ),
-            _ReminderPanel(
-              title: '完整预设提醒语句速查表',
-              child: Column(
-                children: [
-                  for (final phrase in _reminderPhrases)
-                    _PhraseReferenceTile(phrase: phrase),
-                ],
-              ),
-            ),
+            const _PhraseReferenceAccordion(),
           ],
         ),
       ),
@@ -2155,62 +2148,235 @@ class _SavedReminderCard extends StatelessWidget {
   }
 }
 
-class _PhraseReferenceTile extends StatelessWidget {
-  const _PhraseReferenceTile({required this.phrase});
-
-  final _ReminderPhrase phrase;
+class _PhraseReferenceAccordion extends StatelessWidget {
+  const _PhraseReferenceAccordion();
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 30,
-            height: 30,
-            alignment: Alignment.center,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: Color(0xFFEAF6EA),
-            ),
-            child: Text(
-              '${phrase.index}',
-              style: const TextStyle(
-                color: Color(0xFF5C9B72),
-                fontWeight: FontWeight.w900,
-              ),
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          leading: const Icon(
+            Icons.menu_book_outlined,
+            color: Color(0xFF5C9B72),
+          ),
+          title: const Text(
+            '完整预设提醒语句速查表',
+            style: TextStyle(
+              color: Color(0xFF24302A),
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${phrase.category} · ${phrase.subcategory}',
+          subtitle: const Text(
+            '展开查看全部分类语句',
+            style: TextStyle(
+              color: Color(0xFF587171),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          children: [
+            for (final section in _groupReminderPhraseSections())
+              _PhraseReferenceSection(section: section),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PhraseReferenceSection extends StatelessWidget {
+  const _PhraseReferenceSection({required this.section});
+
+  final _ReminderPhraseSection section;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5FBF5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE4EFE5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  section.category,
                   style: const TextStyle(
                     color: Color(0xFF24302A),
+                    fontSize: 15,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  phrase.text,
-                  style: const TextStyle(
-                    color: Color(0xFF587171),
-                    height: 1.35,
-                    fontWeight: FontWeight.w700,
-                  ),
+              ),
+              Text(
+                '${section.phraseCount} 条',
+                style: const TextStyle(
+                  color: Color(0xFF5C9B72),
+                  fontWeight: FontWeight.w900,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+          const SizedBox(height: 10),
+          for (final group in section.groups)
+            _PhraseReferenceGroup(group: group),
         ],
       ),
     );
   }
+}
+
+class _PhraseReferenceGroup extends StatelessWidget {
+  const _PhraseReferenceGroup({required this.group});
+
+  final _ReminderPhraseGroup group;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            group.subcategory,
+            style: const TextStyle(
+              color: Color(0xFF365047),
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 6),
+          for (final phrase in group.phrases)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${phrase.index}.',
+                    style: const TextStyle(
+                      color: Color(0xFF5C9B72),
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      phrase.text,
+                      style: const TextStyle(
+                        color: Color(0xFF587171),
+                        height: 1.35,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReminderPhraseSection {
+  const _ReminderPhraseSection({required this.category, required this.groups});
+
+  final String category;
+  final List<_ReminderPhraseGroup> groups;
+
+  int get phraseCount {
+    return groups.fold(0, (count, group) => count + group.phrases.length);
+  }
+}
+
+class _ReminderPhraseGroup {
+  const _ReminderPhraseGroup({
+    required this.subcategory,
+    required this.phrases,
+  });
+
+  final String subcategory;
+  final List<_ReminderPhrase> phrases;
+}
+
+List<_ReminderPhraseSection> _groupReminderPhraseSections() {
+  final sections = <_ReminderPhraseSection>[];
+  for (final phrase in _reminderPhrases) {
+    final sectionIndex = sections.indexWhere(
+      (section) => section.category == phrase.category,
+    );
+
+    if (sectionIndex == -1) {
+      sections.add(
+        _ReminderPhraseSection(
+          category: phrase.category,
+          groups: [
+            _ReminderPhraseGroup(
+              subcategory: phrase.subcategory,
+              phrases: [phrase],
+            ),
+          ],
+        ),
+      );
+      continue;
+    }
+
+    final section = sections[sectionIndex];
+    final groupIndex = section.groups.indexWhere(
+      (group) => group.subcategory == phrase.subcategory,
+    );
+
+    if (groupIndex == -1) {
+      sections[sectionIndex] = _ReminderPhraseSection(
+        category: section.category,
+        groups: [
+          ...section.groups,
+          _ReminderPhraseGroup(
+            subcategory: phrase.subcategory,
+            phrases: [phrase],
+          ),
+        ],
+      );
+    } else {
+      final group = section.groups[groupIndex];
+      final nextGroups = [...section.groups];
+      nextGroups[groupIndex] = _ReminderPhraseGroup(
+        subcategory: group.subcategory,
+        phrases: [...group.phrases, phrase],
+      );
+      sections[sectionIndex] = _ReminderPhraseSection(
+        category: section.category,
+        groups: nextGroups,
+      );
+    }
+  }
+  return sections;
 }
 
 class _FlowerReminder {
@@ -2851,17 +3017,67 @@ class IslandFeaturePage extends StatelessWidget {
   }
 }
 
-class CabinPage extends StatelessWidget {
-  const CabinPage({super.key, required this.currentEstimate});
+class UserHomePage extends StatefulWidget {
+  const UserHomePage({super.key, required this.currentEstimate});
 
   final HealthStressEstimate? currentEstimate;
 
   @override
+  State<UserHomePage> createState() => _UserHomePageState();
+}
+
+class _UserHomePageState extends State<UserHomePage> {
+  static const _newUserQuestionAnswersKey = 'new_user_question_answers';
+
+  Map<String, dynamic>? _answers;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_newUserQuestionAnswersKey);
+    Map<String, dynamic>? answers;
+    if (raw != null && raw.isNotEmpty) {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        answers = decoded;
+      }
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _answers = answers;
+      _isLoading = false;
+    });
+  }
+
+  String _answerText(String key, {String fallback = '未填写'}) {
+    final value = _answers?[key];
+    if (value is List) {
+      final text = value.whereType<String>().join('、');
+      return text.isEmpty ? fallback : text;
+    }
+    if (value == null || value.toString().trim().isEmpty) {
+      return fallback;
+    }
+    return value.toString();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final nickname = _answerText('nickname', fallback: 'moodland 用户');
+    final stressScore = _answerText('stressScore');
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8FFF4),
       appBar: AppBar(
-        title: const Text('木屋'),
+        title: const Text('我的主页'),
         backgroundColor: const Color(0xFFF8FFF4),
         foregroundColor: const Color(0xFF24302A),
         elevation: 0,
@@ -2870,29 +3086,63 @@ class CabinPage extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
           children: [
-            Text(
-              '把身体信号放在这里慢慢看。',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: const Color(0xFF587171),
-                fontWeight: FontWeight.w700,
-              ),
+            _UserProfileHeader(
+              nickname: nickname,
+              stressScore: stressScore,
+              isLoading: _isLoading,
             ),
             const SizedBox(height: 16),
-            _CabinOptionTile(
-              icon: Icons.monitor_heart_rounded,
-              title: '健康数据详情',
-              subtitle: currentEstimate == null
-                  ? '还没有同步数据，可先查看测试数据预览'
-                  : '查看当前压力、心率、HRV、睡眠和步数',
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (context) => HealthDataDashboardPage(
-                      currentEstimate: currentEstimate,
-                    ),
-                  ),
-                );
-              },
+            _UserHomeSection(
+              title: '个人信息',
+              children: [
+                _UserInfoRow(
+                  icon: Icons.cake_outlined,
+                  label: '生日',
+                  value: _answerText('birthday'),
+                ),
+                _UserInfoRow(
+                  icon: Icons.mood_outlined,
+                  label: '常见情绪',
+                  value: _answerText('emotions'),
+                ),
+                _UserInfoRow(
+                  icon: Icons.waves_outlined,
+                  label: '负面情绪频率',
+                  value: _answerText('negativeFrequency'),
+                ),
+                _UserInfoRow(
+                  icon: Icons.bolt_outlined,
+                  label: '压力来源',
+                  value: _answerText('pressureSources'),
+                ),
+                _UserInfoRow(
+                  icon: Icons.spa_outlined,
+                  label: '放松方式',
+                  value: _answerText('relaxationMethods'),
+                ),
+              ],
+            ),
+            const _UserHomeSection(
+              title: '软件设置',
+              children: [
+                _SettingsInfoTile(
+                  icon: Icons.privacy_tip_outlined,
+                  title: '隐私与权限',
+                  subtitle: '健康数据只在获得授权后读取，用于估算压力趋势。',
+                ),
+                SizedBox(height: 10),
+                _SettingsInfoTile(
+                  icon: Icons.storage_outlined,
+                  title: '本地数据',
+                  subtitle: '对话、提醒和问卷信息保存在本机，用于恢复你的使用状态。',
+                ),
+                SizedBox(height: 10),
+                _SettingsInfoTile(
+                  icon: Icons.info_outline_rounded,
+                  title: '应用版本',
+                  subtitle: 'moodland 1.0.0',
+                ),
+              ],
             ),
           ],
         ),
@@ -2901,68 +3151,207 @@ class CabinPage extends StatelessWidget {
   }
 }
 
-class _CabinOptionTile extends StatelessWidget {
-  const _CabinOptionTile({
+class _UserProfileHeader extends StatelessWidget {
+  const _UserProfileHeader({
+    required this.nickname,
+    required this.stressScore,
+    required this.isLoading,
+  });
+
+  final String nickname;
+  final String stressScore;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE2ECE6)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 60,
+            height: 60,
+            decoration: BoxDecoration(
+              color: const Color(0xFF5C9B72).withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(30),
+            ),
+            child: const Icon(
+              Icons.person_rounded,
+              color: Color(0xFF5C9B72),
+              size: 32,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isLoading ? '正在读取资料...' : nickname,
+                  style: const TextStyle(
+                    color: Color(0xFF24302A),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '问卷压力分数：$stressScore',
+                  style: const TextStyle(
+                    color: Color(0xFF60736C),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UserHomeSection extends StatelessWidget {
+  const _UserHomeSection({required this.title, required this.children});
+
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFF24302A),
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ...children,
+        ],
+      ),
+    );
+  }
+}
+
+class _UserInfoRow extends StatelessWidget {
+  const _UserInfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: const Color(0xFF5C9B72), size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Color(0xFF60736C),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: Color(0xFF24302A),
+                    height: 1.35,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsInfoTile extends StatelessWidget {
+  const _SettingsInfoTile({
     required this.icon,
     required this.title,
     required this.subtitle,
-    required this.onTap,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
-  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FCF7),
         borderRadius: BorderRadius.circular(8),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF5C9B72).withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(23),
+        border: Border.all(color: const Color(0xFFE4EFE5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: const Color(0xFF5C9B72), size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Color(0xFF24302A),
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
-                child: Icon(icon, color: const Color(0xFF5C9B72), size: 24),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        color: Color(0xFF24302A),
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(
-                        color: Color(0xFF60736C),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: Color(0xFF60736C),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                  ),
                 ),
-              ),
-              const Icon(Icons.chevron_right_rounded),
-            ],
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -2990,6 +3379,10 @@ class HealthDataDashboardPage extends StatelessWidget {
         value: '${stats.averageHeartRate?.round() ?? 0}',
         unit: '次/分',
         color: const Color(0xFFE25D56),
+        defaultRange: _HealthMetricRange.day,
+        baseValue: stats.averageHeartRate ?? 72,
+        spread: 9,
+        tilt: 5,
         points: _seriesAround(stats.averageHeartRate ?? 72, 9, 5),
         axisLabels: dayLabels,
       ),
@@ -2998,6 +3391,10 @@ class HealthDataDashboardPage extends StatelessWidget {
         value: '${stats.averageHrv?.round() ?? 0}',
         unit: 'ms',
         color: const Color(0xFF3D8E75),
+        defaultRange: _HealthMetricRange.day,
+        baseValue: stats.averageHrv ?? 42,
+        spread: 7,
+        tilt: -4,
         points: _seriesAround(stats.averageHrv ?? 42, 7, -4),
         axisLabels: dayLabels,
       ),
@@ -3006,6 +3403,10 @@ class HealthDataDashboardPage extends StatelessWidget {
         value: (stats.sleepMinutes / 60).toStringAsFixed(1),
         unit: '小时',
         color: const Color(0xFF597BC7),
+        defaultRange: _HealthMetricRange.week,
+        baseValue: stats.sleepMinutes / 60,
+        spread: 1.0,
+        tilt: 0.3,
         points: _seriesAround(stats.sleepMinutes / 60, 1.0, 0.3),
         axisLabels: weekLabels,
       ),
@@ -3014,6 +3415,10 @@ class HealthDataDashboardPage extends StatelessWidget {
         value: '${stats.steps.round()}',
         unit: '步',
         color: const Color(0xFFD19A35),
+        defaultRange: _HealthMetricRange.week,
+        baseValue: stats.steps / 1000,
+        spread: 1.8,
+        tilt: 0.8,
         points: _seriesAround(stats.steps / 1000, 1.8, 0.8),
         axisLabels: weekLabels,
       ),
@@ -3026,6 +3431,29 @@ class HealthDataDashboardPage extends StatelessWidget {
         backgroundColor: const Color(0xFFF8FFF4),
         foregroundColor: const Color(0xFF24302A),
         elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: '用户主页',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (context) =>
+                      UserHomePage(currentEstimate: currentEstimate),
+                ),
+              );
+            },
+            icon: const CircleAvatar(
+              radius: 14,
+              backgroundColor: Color(0xFFDDF2E0),
+              child: Icon(
+                Icons.person_rounded,
+                size: 18,
+                color: Color(0xFF5C9B72),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: SafeArea(
         child: ListView(
@@ -3139,6 +3567,10 @@ class _HealthMetric {
     required this.value,
     required this.unit,
     required this.color,
+    required this.defaultRange,
+    required this.baseValue,
+    required this.spread,
+    required this.tilt,
     required this.points,
     required this.axisLabels,
   });
@@ -3147,9 +3579,32 @@ class _HealthMetric {
   final String value;
   final String unit;
   final Color color;
+  final _HealthMetricRange defaultRange;
+  final double baseValue;
+  final double spread;
+  final double tilt;
   final List<double> points;
   final List<String> axisLabels;
+
+  _HealthMetric copyWith({List<double>? points, List<String>? axisLabels}) {
+    return _HealthMetric(
+      label: label,
+      value: value,
+      unit: unit,
+      color: color,
+      defaultRange: defaultRange,
+      baseValue: baseValue,
+      spread: spread,
+      tilt: tilt,
+      points: points ?? this.points,
+      axisLabels: axisLabels ?? this.axisLabels,
+    );
+  }
 }
+
+enum _HealthMetricRange { day, week, month }
+
+enum _HealthMetricPrecision { detailed, standard, overview }
 
 class _HealthMetricCard extends StatelessWidget {
   const _HealthMetricCard({required this.metric});
@@ -3158,55 +3613,76 @@ class _HealthMetricCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 198,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE2ECE6)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (context) => _HealthMetricDetailPage(metric: metric),
+            ),
+          );
+        },
+        child: Container(
+          height: 198,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE2ECE6)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Text(
-                  metric.label,
-                  style: const TextStyle(
-                    color: Color(0xFF24302A),
-                    fontWeight: FontWeight.w900,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: Text(
+                      metric.label,
+                      style: const TextStyle(
+                        color: Color(0xFF24302A),
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              Text(
-                metric.value,
-                style: TextStyle(
-                  color: metric.color,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const SizedBox(width: 4),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  metric.unit,
-                  style: const TextStyle(
-                    color: Color(0xFF60736C),
-                    fontWeight: FontWeight.w700,
+                  Text(
+                    metric.value,
+                    style: TextStyle(
+                      color: metric.color,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 4),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      metric.unit,
+                      style: const TextStyle(
+                        color: Color(0xFF60736C),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.only(left: 4, bottom: 4),
+                    child: Icon(
+                      Icons.chevron_right_rounded,
+                      size: 18,
+                      color: Color(0xFF7B8A85),
+                    ),
+                  ),
+                ],
               ),
+              const SizedBox(height: 12),
+              Expanded(child: _HealthTrendChart(metric: metric)),
+              const SizedBox(height: 8),
+              _HealthChartAxis(labels: metric.axisLabels),
             ],
           ),
-          const SizedBox(height: 12),
-          Expanded(child: _HealthTrendChart(metric: metric)),
-          const SizedBox(height: 8),
-          _HealthChartAxis(labels: metric.axisLabels),
-        ],
+        ),
       ),
     );
   }
@@ -3237,6 +3713,295 @@ class _HealthChartAxis extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _HealthMetricDetailPage extends StatefulWidget {
+  const _HealthMetricDetailPage({required this.metric});
+
+  final _HealthMetric metric;
+
+  @override
+  State<_HealthMetricDetailPage> createState() =>
+      _HealthMetricDetailPageState();
+}
+
+class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
+  late _HealthMetricRange _range = widget.metric.defaultRange;
+  _HealthMetricPrecision _precision = _HealthMetricPrecision.standard;
+
+  @override
+  Widget build(BuildContext context) {
+    final points = _metricPoints(widget.metric, _range, _precision);
+    final labels = _axisLabels(_range, _precision, DateTime.now());
+    final chartMetric = widget.metric.copyWith(
+      points: points,
+      axisLabels: labels,
+    );
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FFF4),
+      appBar: AppBar(
+        title: Text(widget.metric.label),
+        backgroundColor: const Color(0xFFF8FFF4),
+        foregroundColor: const Color(0xFF24302A),
+        elevation: 0,
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
+          children: [
+            _HealthMetricDetailHeader(metric: widget.metric),
+            const SizedBox(height: 14),
+            _HealthSegmentPanel(
+              title: '时间范围',
+              child: SegmentedButton<_HealthMetricRange>(
+                segments: const [
+                  ButtonSegment(
+                    value: _HealthMetricRange.day,
+                    label: Text('日'),
+                  ),
+                  ButtonSegment(
+                    value: _HealthMetricRange.week,
+                    label: Text('周'),
+                  ),
+                  ButtonSegment(
+                    value: _HealthMetricRange.month,
+                    label: Text('月'),
+                  ),
+                ],
+                selected: {_range},
+                onSelectionChanged: (values) {
+                  setState(() => _range = values.first);
+                },
+              ),
+            ),
+            const SizedBox(height: 10),
+            _HealthSegmentPanel(
+              title: '显示精度',
+              child: SegmentedButton<_HealthMetricPrecision>(
+                segments: const [
+                  ButtonSegment(
+                    value: _HealthMetricPrecision.detailed,
+                    label: Text('精细'),
+                  ),
+                  ButtonSegment(
+                    value: _HealthMetricPrecision.standard,
+                    label: Text('标准'),
+                  ),
+                  ButtonSegment(
+                    value: _HealthMetricPrecision.overview,
+                    label: Text('概览'),
+                  ),
+                ],
+                selected: {_precision},
+                onSelectionChanged: (values) {
+                  setState(() => _precision = values.first);
+                },
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              height: 280,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE2ECE6)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _rangeDescription(_range, _precision),
+                    style: const TextStyle(
+                      color: Color(0xFF60736C),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(child: _HealthTrendChart(metric: chartMetric)),
+                  const SizedBox(height: 10),
+                  _HealthChartAxis(labels: labels),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static List<double> _metricPoints(
+    _HealthMetric metric,
+    _HealthMetricRange range,
+    _HealthMetricPrecision precision,
+  ) {
+    final count = _pointCount(range, precision);
+    final rangeScale = switch (range) {
+      _HealthMetricRange.day => 1.0,
+      _HealthMetricRange.week => 1.25,
+      _HealthMetricRange.month => 1.5,
+    };
+    final precisionScale = switch (precision) {
+      _HealthMetricPrecision.detailed => 0.85,
+      _HealthMetricPrecision.standard => 1.0,
+      _HealthMetricPrecision.overview => 1.15,
+    };
+    return [
+      for (var i = 0; i < count; i++)
+        (metric.baseValue +
+                (((i * 7) % 11) - 5) * metric.spread * 0.14 * rangeScale +
+                (i - (count - 1) / 2) * metric.tilt / count * precisionScale)
+            .clamp(0, 99999)
+            .toDouble(),
+    ];
+  }
+
+  static List<String> _axisLabels(
+    _HealthMetricRange range,
+    _HealthMetricPrecision precision,
+    DateTime now,
+  ) {
+    final count = _pointCount(range, precision);
+    switch (range) {
+      case _HealthMetricRange.day:
+        final interval = 24 / (count - 1);
+        return [for (var i = 0; i < count; i++) '${(i * interval).round()}点'];
+      case _HealthMetricRange.week:
+        return [
+          for (var i = count - 1; i >= 0; i--)
+            HealthDataDashboardPage._formatMonthDay(
+              now.subtract(Duration(days: i)),
+            ),
+        ];
+      case _HealthMetricRange.month:
+        return [
+          for (var i = count - 1; i >= 0; i--)
+            HealthDataDashboardPage._formatMonthDay(
+              now.subtract(Duration(days: i * 30 ~/ (count - 1))),
+            ),
+        ];
+    }
+  }
+
+  static int _pointCount(
+    _HealthMetricRange range,
+    _HealthMetricPrecision precision,
+  ) {
+    return switch ((range, precision)) {
+      (_HealthMetricRange.day, _HealthMetricPrecision.detailed) => 13,
+      (_HealthMetricRange.day, _HealthMetricPrecision.standard) => 7,
+      (_HealthMetricRange.day, _HealthMetricPrecision.overview) => 4,
+      (_HealthMetricRange.week, _HealthMetricPrecision.detailed) => 7,
+      (_HealthMetricRange.week, _HealthMetricPrecision.standard) => 4,
+      (_HealthMetricRange.week, _HealthMetricPrecision.overview) => 3,
+      (_HealthMetricRange.month, _HealthMetricPrecision.detailed) => 15,
+      (_HealthMetricRange.month, _HealthMetricPrecision.standard) => 6,
+      (_HealthMetricRange.month, _HealthMetricPrecision.overview) => 4,
+    };
+  }
+
+  static String _rangeDescription(
+    _HealthMetricRange range,
+    _HealthMetricPrecision precision,
+  ) {
+    final rangeText = switch (range) {
+      _HealthMetricRange.day => '一天内',
+      _HealthMetricRange.week => '一周内',
+      _HealthMetricRange.month => '一个月内',
+    };
+    final precisionText = switch (precision) {
+      _HealthMetricPrecision.detailed => '精细',
+      _HealthMetricPrecision.standard => '标准',
+      _HealthMetricPrecision.overview => '概览',
+    };
+    return '$rangeText · $precisionText显示';
+  }
+}
+
+class _HealthMetricDetailHeader extends StatelessWidget {
+  const _HealthMetricDetailHeader({required this.metric});
+
+  final _HealthMetric metric;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE2ECE6)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: Text(
+              metric.label,
+              style: const TextStyle(
+                color: Color(0xFF24302A),
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          Text(
+            metric.value,
+            style: TextStyle(
+              color: metric.color,
+              fontSize: 32,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(width: 5),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(
+              metric.unit,
+              style: const TextStyle(
+                color: Color(0xFF60736C),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HealthSegmentPanel extends StatelessWidget {
+  const _HealthSegmentPanel({required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE2ECE6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFF24302A),
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          child,
+        ],
+      ),
     );
   }
 }
@@ -4942,9 +5707,9 @@ class _HealthSyncButton extends StatelessWidget {
           icon: const Icon(Icons.science_rounded, size: 18),
           label: const Text('使用测试数据'),
           style: OutlinedButton.styleFrom(
-            foregroundColor: accentColor,
-            side: BorderSide(color: accentColor.withValues(alpha: 0.45)),
-            backgroundColor: Colors.white.withValues(alpha: 0.82),
+            foregroundColor: const Color(0xFFFFD447),
+            side: const BorderSide(color: Color(0xFF151515)),
+            backgroundColor: const Color(0xFF151515),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             shape: const StadiumBorder(),
           ),
