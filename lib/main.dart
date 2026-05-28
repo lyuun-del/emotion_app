@@ -13,6 +13,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 const _lighthouseAvatarAsset = 'assets/images/lighthouse_lamp_avatar.png';
 const _lighthouseAvatarPathKey = 'lighthouse_assistant_avatar_path';
 const _appIconChannel = MethodChannel('moodland/app_icon');
+const _homeDeepSeekApiKey = String.fromEnvironment('DEEPSEEK_API_KEY');
+const _homeDeepSeekModel = String.fromEnvironment(
+  'DEEPSEEK_MODEL',
+  defaultValue: 'deepseek-chat',
+);
+const _homeDeepSeekApiUrl = String.fromEnvironment(
+  'DEEPSEEK_API_URL',
+  defaultValue: 'https://api.deepseek.com/chat/completions',
+);
 
 class AppIconSwitcher {
   const AppIconSwitcher._();
@@ -84,12 +93,15 @@ class _StressHomePageState extends State<StressHomePage>
   IslandVisualMode _islandMode = IslandVisualMode.day;
   bool _autoSwitchEnabled = false;
   bool _isSyncingHealth = false;
+  bool _isLoadingSupportSuggestion = false;
   String? _healthSyncSummary;
+  String? _aiSupportSuggestion;
   HealthStressEstimate? _latestHealthEstimate;
   TimeOfDay _dayStartTime = const TimeOfDay(hour: 7, minute: 0);
   TimeOfDay _nightStartTime = const TimeOfDay(hour: 22, minute: 0);
   Timer? _autoSwitchTimer;
   int? _homeGuideStep;
+  int _supportSuggestionRequestId = 0;
 
   StressProfile get _profile => StressProfile.fromValue(_stressValue);
   bool get _isShowingHomeGuide => _homeGuideStep != null;
@@ -133,6 +145,7 @@ class _StressHomePageState extends State<StressHomePage>
     _loadAutoSwitchSettings();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showNewUserQuestionsIfNeeded();
+      _refreshAiSupportSuggestion();
     });
   }
 
@@ -354,6 +367,128 @@ class _StressHomePageState extends State<StressHomePage>
     setState(() => _homeGuideStep = null);
   }
 
+  bool get _canUseHomeAiSupport {
+    if (_homeDeepSeekApiKey.isEmpty || _homeDeepSeekModel.isEmpty) {
+      return false;
+    }
+    return !WidgetsBinding.instance.runtimeType.toString().contains('Test');
+  }
+
+  Future<void> _refreshAiSupportSuggestion() async {
+    if (!_canUseHomeAiSupport) {
+      return;
+    }
+
+    final requestId = ++_supportSuggestionRequestId;
+    final profile = _profile;
+    setState(() => _isLoadingSupportSuggestion = true);
+
+    try {
+      final recentChat = await _loadRecentLighthouseChatSummary();
+      final suggestion =
+          await _DeepSeekChatClient(
+            apiKey: _homeDeepSeekApiKey,
+            model: _homeDeepSeekModel,
+            apiUrl: _homeDeepSeekApiUrl,
+          ).supportSuggestion(
+            stressValue: _stressValue.round(),
+            stressLabel: profile.label,
+            fallbackSuggestion: profile.suggestion,
+            recentChat: recentChat,
+          );
+      if (!mounted || requestId != _supportSuggestionRequestId) {
+        return;
+      }
+      setState(() => _aiSupportSuggestion = suggestion);
+    } catch (_) {
+      if (!mounted || requestId != _supportSuggestionRequestId) {
+        return;
+      }
+      setState(() => _aiSupportSuggestion = null);
+    } finally {
+      if (mounted && requestId == _supportSuggestionRequestId) {
+        setState(() => _isLoadingSupportSuggestion = false);
+      }
+    }
+  }
+
+  Future<String> _loadRecentLighthouseChatSummary() async {
+    final prefs = await SharedPreferences.getInstance();
+    final conversations = _decodeSupportConversations(
+      prefs.getString(_DeepSeekChatPageState._chatConversationsKey),
+    );
+    final legacyMessages = _decodeSupportMessages(
+      prefs.getString(_DeepSeekChatPageState._chatHistoryKey),
+    );
+
+    final messages = <_ChatMessage>[
+      for (final conversation in conversations.take(3))
+        ...conversation.messages,
+      ...legacyMessages,
+    ];
+    final recentMessages = messages
+        .where((message) => message.content.trim().isNotEmpty)
+        .toList()
+        .reversed
+        .take(8)
+        .toList()
+        .reversed;
+
+    return recentMessages
+        .map((message) {
+          final role = message.role == _ChatRole.user ? '用户' : '灯塔';
+          final content = message.content.trim().replaceAll(
+            RegExp(r'\s+'),
+            ' ',
+          );
+          final clipped = content.length > 120
+              ? '${content.substring(0, 120)}...'
+              : content;
+          return '$role：$clipped';
+        })
+        .join('\n');
+  }
+
+  List<_ChatConversation> _decodeSupportConversations(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return const [];
+    }
+
+    try {
+      final data = jsonDecode(raw);
+      if (data is! List) {
+        return const [];
+      }
+      final conversations = [
+        for (final item in data)
+          if (item is Map<String, dynamic>) _ChatConversation.fromJson(item),
+      ];
+      conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      return conversations;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  List<_ChatMessage> _decodeSupportMessages(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return const [];
+    }
+
+    try {
+      final data = jsonDecode(raw);
+      if (data is! List) {
+        return const [];
+      }
+      return [
+        for (final item in data)
+          if (item is Map<String, dynamic>) _ChatMessage.fromJson(item),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<void> _syncHealthStress() async {
     if (_isSyncingHealth) {
       return;
@@ -373,7 +508,9 @@ class _StressHomePageState extends State<StressHomePage>
         _stressValue = result.stressValue;
         _healthSyncSummary = result.summary;
         _latestHealthEstimate = result;
+        _aiSupportSuggestion = null;
       });
+      unawaited(_refreshAiSupportSuggestion());
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('已根据健康数据更新压力值。')));
@@ -420,7 +557,9 @@ class _StressHomePageState extends State<StressHomePage>
       _stressValue = result.stressValue;
       _healthSyncSummary = result.summary;
       _latestHealthEstimate = result;
+      _aiSupportSuggestion = null;
     });
+    unawaited(_refreshAiSupportSuggestion());
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('已载入${sample.label}测试数据。')));
@@ -578,6 +717,8 @@ class _StressHomePageState extends State<StressHomePage>
                           profile: profile,
                           islandTheme: islandTheme,
                           size: cardSize,
+                          aiSuggestion: _aiSupportSuggestion,
+                          isLoading: _isLoadingSupportSuggestion,
                         ),
                       ),
                     ],
@@ -3475,6 +3616,7 @@ class UserHomePage extends StatefulWidget {
 }
 
 class _UserHomePageState extends State<UserHomePage> {
+  static const _newUserQuestionsCompletedKey = 'new_user_questions_completed';
   static const _newUserQuestionAnswersKey = 'new_user_question_answers';
 
   Map<String, dynamic>? _answers;
@@ -3553,6 +3695,32 @@ class _UserHomePageState extends State<UserHomePage> {
     }
     setState(() => _assistantAvatarPath = null);
     _showUserHomeMessage('已恢复默认灯塔头像');
+  }
+
+  Future<void> _retakeNewUserQuestions() async {
+    final answers = await Navigator.of(context).push<Map<String, Object?>>(
+      MaterialPageRoute<Map<String, Object?>>(
+        fullscreenDialog: true,
+        builder: (context) => const _NewUserQuestionsPage(),
+      ),
+    );
+
+    if (answers == null) {
+      return;
+    }
+
+    final savedAnswers = {
+      'submittedAt': DateTime.now().toIso8601String(),
+      ...answers,
+    };
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_newUserQuestionAnswersKey, jsonEncode(savedAnswers));
+    await prefs.setBool(_newUserQuestionsCompletedKey, true);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _answers = savedAnswers);
+    _showUserHomeMessage('新手问题已更新');
   }
 
   void _showUserHomeMessage(String message) {
@@ -3641,6 +3809,13 @@ class _UserHomePageState extends State<UserHomePage> {
                   isPicking: _isPickingAssistantAvatar,
                   onChange: _changeAssistantAvatar,
                   onReset: _resetAssistantAvatar,
+                ),
+                const SizedBox(height: 10),
+                _SettingsActionTile(
+                  icon: Icons.assignment_outlined,
+                  title: '新手问题',
+                  subtitle: '重新回答情绪、压力和偏好问题，让灯塔更了解你。',
+                  onTap: _retakeNewUserQuestions,
                 ),
                 const SizedBox(height: 10),
                 _SettingsInfoTile(
@@ -3870,6 +4045,72 @@ class _SettingsInfoTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SettingsActionTile extends StatelessWidget {
+  const _SettingsActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFF7FCF7),
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE4EFE5)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, color: const Color(0xFF5C9B72), size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Color(0xFF24302A),
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Color(0xFF60736C),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(Icons.chevron_right_rounded, color: Color(0xFF8DA39B)),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -5632,6 +5873,32 @@ class _DeepSeekChatClient {
   final String model;
   final String apiUrl;
 
+  Future<String> supportSuggestion({
+    required int stressValue,
+    required String stressLabel,
+    required String fallbackSuggestion,
+    required String recentChat,
+  }) async {
+    final systemPrompt = [
+      '你是 moodland 应用里的灯塔。你要根据压力值和最近聊天记录，给首页生成一句“恢复建议”。',
+      '要求：只输出一句中文，不超过 34 个字；温柔、沉静、具体；可以使用光、海、靠岸等意象，但不要堆砌。',
+      '不要诊断，不要说教，不要使用“你应该”或“你最好”。',
+      '如果聊天记录不足，就参考压力状态和默认建议。',
+    ].join('\n');
+    final userPrompt = [
+      '当前压力值：$stressValue',
+      '压力状态：$stressLabel',
+      '默认建议：$fallbackSuggestion',
+      if (recentChat.trim().isNotEmpty) '最近聊天记录：\n$recentChat',
+      '请生成一句首页恢复建议。',
+    ].join('\n\n');
+
+    return _sendRawMessages([
+      {'role': 'system', 'content': systemPrompt},
+      {'role': 'user', 'content': userPrompt},
+    ]);
+  }
+
   Future<String> send(
     List<_ChatMessage> messages, {
     required String? userProfileContext,
@@ -5653,6 +5920,17 @@ class _DeepSeekChatClient {
         userProfileContext.trim(),
     ].join('\n\n');
 
+    return _sendRawMessages([
+      {'role': 'system', 'content': systemPrompt},
+      for (final message in messages)
+        {
+          'role': message.role == _ChatRole.user ? 'user' : 'assistant',
+          'content': message.content,
+        },
+    ]);
+  }
+
+  Future<String> _sendRawMessages(List<Map<String, String>> messages) async {
     final response = await http
         .post(
           Uri.parse(apiUrl),
@@ -5660,17 +5938,7 @@ class _DeepSeekChatClient {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer $apiKey',
           },
-          body: jsonEncode({
-            'model': model,
-            'messages': [
-              {'role': 'system', 'content': systemPrompt},
-              for (final message in messages)
-                {
-                  'role': message.role == _ChatRole.user ? 'user' : 'assistant',
-                  'content': message.content,
-                },
-            ],
-          }),
+          body: jsonEncode({'model': model, 'messages': messages}),
         )
         .timeout(const Duration(seconds: 30));
 
@@ -6548,11 +6816,15 @@ class _SupportCard extends StatelessWidget {
     required this.profile,
     required this.islandTheme,
     required this.size,
+    required this.aiSuggestion,
+    required this.isLoading,
   });
 
   final StressProfile profile;
   final IslandVisualTheme islandTheme;
   final double size;
+  final String? aiSuggestion;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -6605,13 +6877,27 @@ class _SupportCard extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Expanded(
-              child: Text(
-                profile.suggestion,
-                overflow: TextOverflow.fade,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: islandTheme.secondaryTextColor,
-                  height: 1.25,
-                ),
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 240),
+                child: isLoading
+                    ? Text(
+                        '灯塔正在看最近的风向...',
+                        key: const ValueKey('support-loading'),
+                        overflow: TextOverflow.fade,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: islandTheme.secondaryTextColor,
+                          height: 1.25,
+                        ),
+                      )
+                    : Text(
+                        aiSuggestion ?? profile.suggestion,
+                        key: ValueKey(aiSuggestion ?? profile.suggestion),
+                        overflow: TextOverflow.fade,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: islandTheme.secondaryTextColor,
+                          height: 1.25,
+                        ),
+                      ),
               ),
             ),
           ],

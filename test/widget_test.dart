@@ -181,6 +181,7 @@ void main() {
       expect(find.text('软件设置'), findsOneWidget);
       expect(find.text('灯塔头像'), findsOneWidget);
       expect(find.text('更改'), findsOneWidget);
+      expect(find.text('新手问题'), findsOneWidget);
       expect(find.text('隐私与权限'), findsOneWidget);
       expect(find.text('本地数据'), findsOneWidget);
       expect(find.text('应用版本'), findsOneWidget);
@@ -204,6 +205,28 @@ void main() {
     expect(find.text('灯塔头像'), findsOneWidget);
     expect(find.text('更改'), findsOneWidget);
     expect(find.text('恢复默认'), findsOneWidget);
+  });
+
+  testWidgets('user page can reopen new user questions from settings', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'new_user_questions_completed': true,
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: UserHomePage(currentEstimate: null)),
+    );
+    await tester.pump();
+
+    await tester.drag(find.byType(ListView), const Offset(0, -260));
+    await tester.pump();
+    await tester.tap(find.text('新手问题'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('新手问题'), findsWidgets);
+    expect(find.text('先让 moodland 认识一下你。'), findsOneWidget);
   });
 
   testWidgets('deepseek chat page starts a new conversation', (tester) async {
