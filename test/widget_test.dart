@@ -7,6 +7,7 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({
       'new_user_questions_completed': true,
+      'home_guide_completed': true,
     });
   });
 
@@ -69,8 +70,31 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
+    expect(find.text('欢迎来到 moodland'), findsOneWidget);
+    expect(find.textContaining('压力值、健康数据、情绪记录和灯塔对话'), findsOneWidget);
+
+    await tester.tap(find.text('下一步'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
     expect(find.text('灯塔'), findsOneWidget);
     expect(find.textContaining('点这里进入灯塔对话'), findsOneWidget);
+    expect(find.text('新手问题'), findsNothing);
+  });
+
+  testWidgets('first launch shows app overview guide before questions', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(
+      const MoodStressApp(enableHighFidelityIsland: false),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('欢迎来到 moodland'), findsOneWidget);
+    expect(find.textContaining('这里会把压力值'), findsOneWidget);
     expect(find.text('新手问题'), findsNothing);
   });
 
@@ -199,21 +223,21 @@ void main() {
       await tester.scrollUntilVisible(
         find.text('HRV'),
         180,
-        scrollable: find.byType(Scrollable).last,
+        scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('HRV'), findsOneWidget);
 
       await tester.scrollUntilVisible(
         find.text('睡眠'),
         220,
-        scrollable: find.byType(Scrollable).last,
+        scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('睡眠'), findsOneWidget);
 
       await tester.scrollUntilVisible(
         find.text('步数'),
         260,
-        scrollable: find.byType(Scrollable).last,
+        scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('步数'), findsOneWidget);
 

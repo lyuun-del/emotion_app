@@ -87,6 +87,7 @@ class _StressHomePageState extends State<StressHomePage>
   static const _manualModeKey = 'manual_island_mode';
   static const _newUserQuestionsCompletedKey = 'new_user_questions_completed';
   static const _newUserQuestionAnswersKey = 'new_user_question_answers';
+  static const _homeGuideCompletedKey = 'home_guide_completed';
 
   double _stressValue = 38;
   MoodOption? _selectedMood;
@@ -106,6 +107,10 @@ class _StressHomePageState extends State<StressHomePage>
   StressProfile get _profile => StressProfile.fromValue(_stressValue);
   bool get _isShowingHomeGuide => _homeGuideStep != null;
   List<_HomeGuideStep> get _homeGuideSteps => [
+    const _HomeGuideStep(
+      title: '欢迎来到 moodland',
+      message: '这里会把压力值、健康数据、情绪记录和灯塔对话放在同一座小岛上，帮你更快看见自己的状态。',
+    ),
     _HomeGuideStep(
       target: _IslandHotspotTarget.lighthouse,
       title: '灯塔',
@@ -144,7 +149,7 @@ class _StressHomePageState extends State<StressHomePage>
     WidgetsBinding.instance.addObserver(this);
     _loadAutoSwitchSettings();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _showNewUserQuestionsIfNeeded();
+      _showFirstLaunchGuideIfNeeded();
       _refreshAiSupportSuggestion();
     });
   }
@@ -327,6 +332,17 @@ class _StressHomePageState extends State<StressHomePage>
     await _openNewUserQuestions();
   }
 
+  Future<void> _showFirstLaunchGuideIfNeeded() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasSeenGuide = prefs.getBool(_homeGuideCompletedKey) ?? false;
+    if (hasSeenGuide || !mounted) {
+      await _showNewUserQuestionsIfNeeded();
+      return;
+    }
+
+    setState(() => _homeGuideStep = 0);
+  }
+
   Future<void> _openNewUserQuestions() async {
     final answers = await Navigator.of(context).push<Map<String, Object?>>(
       MaterialPageRoute<Map<String, Object?>>(
@@ -357,14 +373,17 @@ class _StressHomePageState extends State<StressHomePage>
       return;
     }
     if (currentStep >= _homeGuideSteps.length - 1) {
-      _closeHomeGuide();
+      unawaited(_closeHomeGuide());
       return;
     }
     setState(() => _homeGuideStep = currentStep + 1);
   }
 
-  void _closeHomeGuide() {
+  Future<void> _closeHomeGuide() async {
     setState(() => _homeGuideStep = null);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_homeGuideCompletedKey, true);
+    await _showNewUserQuestionsIfNeeded();
   }
 
   bool get _canUseHomeAiSupport {
@@ -767,7 +786,7 @@ class _StressHomePageState extends State<StressHomePage>
                 stepNumber: _homeGuideStep! + 1,
                 stepCount: _homeGuideSteps.length,
                 onNext: _showNextHomeGuideStep,
-                onClose: _closeHomeGuide,
+                onClose: () => unawaited(_closeHomeGuide()),
               ),
           ],
         ),
@@ -1603,12 +1622,12 @@ class _TutorialButton extends StatelessWidget {
 
 class _HomeGuideStep {
   const _HomeGuideStep({
-    required this.target,
+    this.target,
     required this.title,
     required this.message,
   });
 
-  final _IslandHotspotTarget target;
+  final _IslandHotspotTarget? target;
   final String title;
   final String message;
 }
@@ -1647,15 +1666,18 @@ class _HomeGuideOverlayState extends State<_HomeGuideOverlay> {
           screenSize.width,
           displayedHeight,
         );
-        final hotspot = _islandHotspots.firstWhere(
-          (hotspot) => hotspot.target == widget.step.target,
+        final targetRect = widget.step.target == null
+            ? Rect.fromLTWH(
+                screenSize.width * 0.10,
+                imageRect.top + imageRect.height * 0.18,
+                screenSize.width * 0.80,
+                imageRect.height * 0.58,
+              )
+            : _targetRectForHotspot(imageRect, widget.step.target!).inflate(8);
+        final targetRRect = RRect.fromRectAndRadius(
+          targetRect,
+          const Radius.circular(18),
         );
-        final targetPath = _IslandHotspotPath(
-          imageRect: imageRect,
-          outline: hotspot.outline,
-          pathOffset: hotspot.pathOffset,
-        ).path;
-        final targetRect = targetPath.getBounds().inflate(8);
         const cardWidth = 288.0;
         const cardHeight = 158.0;
         final cardRect = _guideCardRect(
@@ -1671,7 +1693,7 @@ class _HomeGuideOverlayState extends State<_HomeGuideOverlay> {
               child: IgnorePointer(
                 child: CustomPaint(
                   painter: _HomeGuideScrimPainter(
-                    targetPath: targetPath,
+                    targetRRect: targetRRect,
                     targetRect: targetRect,
                     cardRect: cardRect,
                   ),
@@ -1751,16 +1773,27 @@ class _HomeGuideOverlayState extends State<_HomeGuideOverlay> {
 
     return candidates.first;
   }
+
+  Rect _targetRectForHotspot(Rect imageRect, _IslandHotspotTarget target) {
+    final hotspot = _islandHotspots.firstWhere(
+      (hotspot) => hotspot.target == target,
+    );
+    return _IslandHotspotPath(
+      imageRect: imageRect,
+      outline: hotspot.outline,
+      pathOffset: hotspot.pathOffset,
+    ).path.getBounds();
+  }
 }
 
 class _HomeGuideScrimPainter extends CustomPainter {
   const _HomeGuideScrimPainter({
-    required this.targetPath,
+    required this.targetRRect,
     required this.targetRect,
     required this.cardRect,
   });
 
-  final Path targetPath;
+  final RRect targetRRect;
   final Rect targetRect;
   final Rect cardRect;
 
@@ -1769,7 +1802,7 @@ class _HomeGuideScrimPainter extends CustomPainter {
     final scrimPath = Path()
       ..fillType = PathFillType.evenOdd
       ..addRect(Offset.zero & size)
-      ..addPath(targetPath, Offset.zero);
+      ..addRRect(targetRRect);
     canvas.drawPath(scrimPath, Paint()..color = const Color(0x80000000));
 
     final targetCenter = targetRect.center;
@@ -1785,12 +1818,12 @@ class _HomeGuideScrimPainter extends CustomPainter {
       ..color = Colors.white.withValues(alpha: 0.95)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
-    canvas.drawPath(targetPath, borderPaint);
+    canvas.drawRRect(targetRRect, borderPaint);
   }
 
   @override
   bool shouldRepaint(covariant _HomeGuideScrimPainter oldDelegate) {
-    return oldDelegate.targetPath != targetPath ||
+    return oldDelegate.targetRRect != targetRRect ||
         oldDelegate.targetRect != targetRect ||
         oldDelegate.cardRect != cardRect;
   }
@@ -4661,6 +4694,53 @@ class _HealthChartAxis extends StatelessWidget {
   }
 }
 
+class _ScrollableHealthTrendChart extends StatelessWidget {
+  const _ScrollableHealthTrendChart({required this.metric});
+
+  final _HealthMetric metric;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final contentWidth = _contentWidth(
+          constraints.maxWidth,
+          metric.points.length,
+        );
+
+        return Scrollbar(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: contentWidth,
+              child: Column(
+                children: [
+                  Expanded(child: _HealthTrendChart(metric: metric)),
+                  const SizedBox(height: 10),
+                  _HealthChartAxis(labels: metric.axisLabels),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  double _contentWidth(double viewportWidth, int pointCount) {
+    if (pointCount <= 1) {
+      return viewportWidth;
+    }
+    final minPointSpacing = switch (pointCount) {
+      >= 13 => 54.0,
+      >= 7 => 48.0,
+      _ => 64.0,
+    };
+    final preferredWidth = (pointCount - 1) * minPointSpacing + 24;
+    return preferredWidth < viewportWidth ? viewportWidth : preferredWidth;
+  }
+}
+
 class _HealthMetricDetailPage extends StatefulWidget {
   const _HealthMetricDetailPage({required this.metric});
 
@@ -4747,7 +4827,7 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
             ),
             const SizedBox(height: 14),
             Container(
-              height: 280,
+              height: 292,
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: Colors.white,
@@ -4765,9 +4845,9 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  Expanded(child: _HealthTrendChart(metric: chartMetric)),
-                  const SizedBox(height: 10),
-                  _HealthChartAxis(labels: labels),
+                  Expanded(
+                    child: _ScrollableHealthTrendChart(metric: chartMetric),
+                  ),
                 ],
               ),
             ),
@@ -6494,22 +6574,16 @@ class _StressValueCapsule extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final capsuleRadius = BorderRadius.circular(999);
     return Material(
       color: Colors.transparent,
-      borderRadius: BorderRadius.circular(999),
+      borderRadius: capsuleRadius,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Ink(
-          width: 148,
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        borderRadius: capsuleRadius,
+        child: DecoratedBox(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            color: islandTheme.surfaceColor,
-            border: Border.all(
-              color: islandTheme.surfaceBorderColor,
-              width: 1.3,
-            ),
+            borderRadius: capsuleRadius,
             boxShadow: [
               BoxShadow(
                 color: islandTheme.shadowColor,
@@ -6518,26 +6592,48 @@ class _StressValueCapsule extends StatelessWidget {
               ),
             ],
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                '$roundedValue',
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w900,
-                  color: islandTheme.primaryTextColor,
+          child: ClipRRect(
+            borderRadius: capsuleRadius,
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Container(
+                width: 148,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 16,
+                ),
+                decoration: BoxDecoration(
+                  borderRadius: capsuleRadius,
+                  color: islandTheme.surfaceColor,
+                  border: Border.all(
+                    color: islandTheme.surfaceBorderColor,
+                    width: 1.3,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '$roundedValue',
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(
+                            fontWeight: FontWeight.w900,
+                            color: islandTheme.primaryTextColor,
+                          ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '压力值',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: islandTheme.secondaryTextColor,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              Text(
-                '压力值',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: islandTheme.secondaryTextColor,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -6899,7 +6995,6 @@ class _SupportCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       width: size,
-      height: 92,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -6985,31 +7080,27 @@ class _SupportCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 6),
-                Expanded(
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 240),
-                    child: isLoading
-                        ? Text(
-                            '灯塔正在看最近的风向...',
-                            key: const ValueKey('support-loading'),
-                            overflow: TextOverflow.fade,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: islandTheme.secondaryTextColor,
-                                  height: 1.25,
-                                ),
-                          )
-                        : Text(
-                            aiSuggestion ?? profile.suggestion,
-                            key: ValueKey(aiSuggestion ?? profile.suggestion),
-                            overflow: TextOverflow.fade,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: islandTheme.secondaryTextColor,
-                                  height: 1.25,
-                                ),
-                          ),
-                  ),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 240),
+                  child: isLoading
+                      ? Text(
+                          '灯塔正在看最近的风向...',
+                          key: const ValueKey('support-loading'),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: islandTheme.secondaryTextColor,
+                                height: 1.28,
+                              ),
+                        )
+                      : Text(
+                          aiSuggestion ?? profile.suggestion,
+                          key: ValueKey(aiSuggestion ?? profile.suggestion),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: islandTheme.secondaryTextColor,
+                                height: 1.28,
+                              ),
+                        ),
                 ),
               ],
             ),
