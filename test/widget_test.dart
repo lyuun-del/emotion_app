@@ -33,6 +33,31 @@ void main() {
     expect(find.text('可行的恢复建议'), findsOneWidget);
     expect(find.text('当前压力值 38'), findsOneWidget);
     expect(find.text('离开屏幕看远处'), findsOneWidget);
+    expect(find.text('和灯塔对话'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('和灯塔对话'),
+      180,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('和灯塔对话'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('灯塔对话'), findsOneWidget);
+    expect(find.byTooltip('新对话'), findsOneWidget);
+  });
+
+  testWidgets('stress value opens metric detail', (tester) async {
+    await tester.pumpWidget(
+      const MoodStressApp(enableHighFidelityIsland: false),
+    );
+
+    await tester.tap(find.text('压力值'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('时间范围'), findsOneWidget);
+    expect(find.text('显示精度'), findsOneWidget);
+    expect(find.text('一天内 · 标准显示'), findsOneWidget);
   });
 
   testWidgets('stress home can open home guide overlay', (tester) async {
@@ -66,7 +91,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('73'), findsOneWidget);
+    expect(find.text('57'), findsOneWidget);
     expect(find.text('压力偏高'), findsOneWidget);
     expect(find.textContaining('测试数据 · 压力偏高'), findsOneWidget);
 
@@ -77,8 +102,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('91'), findsOneWidget);
-    expect(find.text('需要恢复'), findsOneWidget);
+    expect(find.text('70'), findsOneWidget);
+    expect(find.text('压力偏高'), findsOneWidget);
     expect(find.textContaining('测试数据 · 需要恢复'), findsOneWidget);
   });
 
@@ -144,8 +169,8 @@ void main() {
       expect(find.text('健康数据详情'), findsOneWidget);
       expect(find.text('当前压力趋势'), findsOneWidget);
       expect(find.byTooltip('用户主页'), findsOneWidget);
+      expect(find.text('压力值'), findsOneWidget);
       expect(find.text('心率'), findsOneWidget);
-      expect(find.text('HRV'), findsOneWidget);
       expect(find.text('0点'), findsWidgets);
 
       await tester.tap(
@@ -170,6 +195,13 @@ void main() {
       await tester.tap(find.byTooltip('Back').last);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 350));
+
+      await tester.scrollUntilVisible(
+        find.text('HRV'),
+        180,
+        scrollable: find.byType(Scrollable).last,
+      );
+      expect(find.text('HRV'), findsOneWidget);
 
       await tester.scrollUntilVisible(
         find.text('睡眠'),

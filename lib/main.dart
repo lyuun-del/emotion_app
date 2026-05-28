@@ -425,6 +425,16 @@ class _StressHomePageState extends State<StressHomePage>
     );
   }
 
+  void _openStressMetricDetail() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => _HealthMetricDetailPage(
+          metric: HealthDataDashboardPage._stressMetricForValue(_stressValue),
+        ),
+      ),
+    );
+  }
+
   Future<String> _loadRecentLighthouseChatSummary() async {
     final prefs = await SharedPreferences.getInstance();
     final conversations = _decodeSupportConversations(
@@ -513,7 +523,9 @@ class _StressHomePageState extends State<StressHomePage>
     });
 
     try {
-      final result = await const HealthStressEstimator().estimate();
+      final result = await const HealthStressEstimator().estimate(
+        lastStress: _stressValue,
+      );
       if (!mounted) {
         return;
       }
@@ -526,7 +538,7 @@ class _StressHomePageState extends State<StressHomePage>
       unawaited(_refreshAiSupportSuggestion());
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('已根据健康数据更新压力值。')));
+      ).showSnackBar(SnackBar(content: Text(result.summary)));
     } on HealthStressPermissionException catch (error) {
       if (!mounted) {
         return;
@@ -565,7 +577,10 @@ class _StressHomePageState extends State<StressHomePage>
       return;
     }
 
-    final result = const HealthStressEstimator().sampleEstimate(sample);
+    final result = const HealthStressEstimator().sampleEstimate(
+      sample,
+      lastStress: _stressValue,
+    );
     setState(() {
       _stressValue = result.stressValue;
       _healthSyncSummary = result.summary;
@@ -659,15 +674,19 @@ class _StressHomePageState extends State<StressHomePage>
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final compact = constraints.maxWidth < 420;
-                  final cardSize = constraints.maxWidth / 2;
                   final horizontalInset = compact ? 20.0 : 32.0;
                   final supportCardRightInset = compact ? 20.0 : 32.0;
+                  final supportCardWidth =
+                      (constraints.maxWidth * (compact ? 0.42 : 0.34)).clamp(
+                        150.0,
+                        compact ? 178.0 : 300.0,
+                      );
                   final sliderWidth =
                       (constraints.maxWidth -
-                              cardSize -
+                              supportCardWidth -
                               horizontalInset -
                               supportCardRightInset -
-                              16)
+                              20)
                           .clamp(160.0, 520.0);
 
                   return Stack(
@@ -710,6 +729,7 @@ class _StressHomePageState extends State<StressHomePage>
                                 profile: profile,
                                 roundedValue: _stressValue.round(),
                                 islandTheme: islandTheme,
+                                onTap: _openStressMetricDetail,
                               ),
                             ),
                             const SizedBox(height: 10),
@@ -729,7 +749,7 @@ class _StressHomePageState extends State<StressHomePage>
                         child: _SupportCard(
                           profile: profile,
                           islandTheme: islandTheme,
-                          size: cardSize,
+                          size: supportCardWidth,
                           aiSuggestion: _aiSupportSuggestion,
                           isLoading: _isLoadingSupportSuggestion,
                           onRefresh: _refreshAiSupportSuggestion,
@@ -4281,6 +4301,7 @@ class HealthDataDashboardPage extends StatelessWidget {
     final dayLabels = _dayTimeLabels();
     final weekLabels = _weekDateLabels(DateTime.now());
     final metrics = [
+      _stressMetricForValue(estimate.stressValue),
       _HealthMetric(
         label: '心率',
         value: '${stats.averageHeartRate?.round() ?? 0}',
@@ -4452,6 +4473,22 @@ class HealthDataDashboardPage extends StatelessWidget {
       for (var i = 0; i < factors.length; i++)
         (center + factors[i] * spread + (i - 3) * tilt / 6).clamp(0, 99999),
     ];
+  }
+
+  static _HealthMetric _stressMetricForValue(double stressValue) {
+    final profile = StressProfile.fromValue(stressValue);
+    return _HealthMetric(
+      label: '压力值',
+      value: '${stressValue.round()}',
+      unit: '%',
+      color: profile.accentColor,
+      defaultRange: _HealthMetricRange.day,
+      baseValue: stressValue,
+      spread: 7,
+      tilt: 3,
+      points: _seriesAround(stressValue, 7, 3),
+      axisLabels: _dayTimeLabels(),
+    );
   }
 
   static List<String> _dayTimeLabels() {
@@ -6447,49 +6484,62 @@ class _StressValueCapsule extends StatelessWidget {
     required this.profile,
     required this.roundedValue,
     required this.islandTheme,
+    required this.onTap,
   });
 
   final StressProfile profile;
   final int roundedValue;
   final IslandVisualTheme islandTheme;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 148,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-      decoration: BoxDecoration(
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(999),
-        color: islandTheme.surfaceColor,
-        border: Border.all(color: islandTheme.surfaceBorderColor, width: 1.3),
-        boxShadow: [
-          BoxShadow(
-            color: islandTheme.shadowColor,
-            blurRadius: 26,
-            offset: const Offset(0, 14),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            '$roundedValue',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.w900,
-              color: islandTheme.primaryTextColor,
+        child: Ink(
+          width: 148,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            color: islandTheme.surfaceColor,
+            border: Border.all(
+              color: islandTheme.surfaceBorderColor,
+              width: 1.3,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: islandTheme.shadowColor,
+                blurRadius: 26,
+                offset: const Offset(0, 14),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Text(
-            '压力值',
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-              color: islandTheme.secondaryTextColor,
-              fontWeight: FontWeight.w800,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '$roundedValue',
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  color: islandTheme.primaryTextColor,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '压力值',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: islandTheme.secondaryTextColor,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -7086,6 +7136,31 @@ class RecoveryAdvicePage extends StatelessWidget {
               _RecoveryStepCard(step: step, accentColor: profile.accentColor),
               const SizedBox(height: 10),
             ],
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 52,
+              child: FilledButton.icon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (context) => const DeepSeekChatPage(),
+                    ),
+                  );
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF26322B),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                icon: const Icon(Icons.lightbulb_outline_rounded),
+                label: const Text(
+                  '和灯塔对话',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -7353,6 +7428,7 @@ class HealthStressEstimator {
       averageHeartRate: 62,
       averageRestingHeartRate: 58,
       averageHrv: 72,
+      hrvBaseline: 65,
       steps: 8400,
       sleepMinutes: 505,
     ),
@@ -7361,6 +7437,7 @@ class HealthStressEstimator {
       averageHeartRate: 78,
       averageRestingHeartRate: 64,
       averageHrv: 42,
+      hrvBaseline: 58,
       steps: 4600,
       sleepMinutes: 430,
     ),
@@ -7369,6 +7446,7 @@ class HealthStressEstimator {
       averageHeartRate: 88,
       averageRestingHeartRate: 65,
       averageHrv: 30,
+      hrvBaseline: 55,
       steps: 2400,
       sleepMinutes: 385,
     ),
@@ -7377,6 +7455,7 @@ class HealthStressEstimator {
       averageHeartRate: 94,
       averageRestingHeartRate: 66,
       averageHrv: 24,
+      hrvBaseline: 58,
       steps: 1280,
       sleepMinutes: 335,
     ),
@@ -7393,7 +7472,7 @@ class HealthStressEstimator {
     HealthDataType.SLEEP_REM,
   ];
 
-  Future<HealthStressEstimate> estimate() async {
+  Future<HealthStressEstimate> estimate({required double lastStress}) async {
     final health = Health();
     await health.configure();
 
@@ -7418,27 +7497,41 @@ class HealthStressEstimator {
 
     final now = DateTime.now();
     final start = now.subtract(const Duration(hours: 24));
+    final baselineStart = now.subtract(const Duration(days: 30));
     final data = await health.getHealthDataFromTypes(
       types: availableTypes,
       startTime: start,
       endTime: now,
     );
+    final baselineData = await health.getHealthDataFromTypes(
+      types: availableTypes,
+      startTime: baselineStart,
+      endTime: start,
+    );
 
     final stats = HealthStressStats.fromData(data);
+    final baselineStats = HealthStressStats.fromData(baselineData);
     if (!stats.hasAnySignal) {
       throw const HealthStressPermissionException(
         '近 24 小时没有可用的心率、HRV、睡眠或步数数据。',
       );
     }
+    final result = stats.calculateStress(
+      hrvBaseline: baselineStats.averageHrv,
+      lastStress: lastStress,
+    );
 
     return HealthStressEstimate(
-      stressValue: stats.estimatedStress.clamp(0, 100).toDouble(),
-      summary: stats.summary,
+      stressValue: result.stressValue,
+      summary: result.summary,
       stats: stats,
     );
   }
 
-  HealthStressEstimate sampleEstimate(HealthStressSample sample) {
+  HealthStressEstimate sampleEstimate(
+    HealthStressSample sample, {
+    double lastStress = 38,
+  }) {
     final stats = HealthStressStats(
       averageHeartRate: sample.averageHeartRate,
       averageRestingHeartRate: sample.averageRestingHeartRate,
@@ -7446,9 +7539,13 @@ class HealthStressEstimator {
       steps: sample.steps,
       sleepMinutes: sample.sleepMinutes,
     );
+    final result = stats.calculateStress(
+      hrvBaseline: sample.hrvBaseline,
+      lastStress: lastStress,
+    );
     return HealthStressEstimate(
-      stressValue: stats.estimatedStress.clamp(0, 100).toDouble(),
-      summary: '测试数据 · ${sample.label}：${stats.summary}',
+      stressValue: result.stressValue,
+      summary: '测试数据 · ${sample.label}：${result.summary}',
       stats: stats,
     );
   }
@@ -7460,6 +7557,7 @@ class HealthStressSample {
     required this.averageHeartRate,
     required this.averageRestingHeartRate,
     required this.averageHrv,
+    required this.hrvBaseline,
     required this.steps,
     required this.sleepMinutes,
   });
@@ -7468,11 +7566,12 @@ class HealthStressSample {
   final double averageHeartRate;
   final double averageRestingHeartRate;
   final double averageHrv;
+  final double hrvBaseline;
   final double steps;
   final double sleepMinutes;
 
   String get shortSummary {
-    return '心率 ${averageHeartRate.round()} · HRV ${averageHrv.round()}ms · 睡眠 ${(sleepMinutes / 60).toStringAsFixed(1)}h';
+    return '心率 ${averageHeartRate.round()} · HRV ${averageHrv.round()}ms · 基线 ${hrvBaseline.round()}ms';
   }
 }
 
@@ -7558,57 +7657,48 @@ class HealthStressStats {
         sleepMinutes > 0;
   }
 
-  double get estimatedStress {
-    var score = 35.0;
+  HealthStressCalculation calculateStress({
+    required double? hrvBaseline,
+    required double lastStress,
+  }) {
+    final heartRate = averageHeartRate;
+    final hrv = averageHrv;
+    final heartRateBaseline = averageRestingHeartRate;
+    final safeLastStress = lastStress.clamp(0, 100).toDouble();
 
-    if (averageHeartRate != null && averageRestingHeartRate != null) {
-      final heartRateDelta = averageHeartRate! - averageRestingHeartRate!;
-      if (heartRateDelta >= 30) {
-        score += 25;
-      } else if (heartRateDelta >= 15) {
-        score += 15;
-      } else if (heartRateDelta >= 8) {
-        score += 8;
-      }
-    } else if (averageHeartRate != null) {
-      if (averageHeartRate! >= 95) {
-        score += 18;
-      } else if (averageHeartRate! >= 85) {
-        score += 10;
-      } else if (averageHeartRate! <= 65) {
-        score -= 5;
-      }
+    if (heartRate == null ||
+        hrv == null ||
+        heartRateBaseline == null ||
+        hrvBaseline == null ||
+        heartRateBaseline <= 0 ||
+        hrvBaseline <= 0) {
+      return HealthStressCalculation(
+        stressValue: safeLastStress.roundToDouble(),
+        summary: '数据不足',
+      );
     }
 
-    if (averageHrv != null) {
-      if (averageHrv! < 20) {
-        score += 25;
-      } else if (averageHrv! < 35) {
-        score += 15;
-      } else if (averageHrv! > 55) {
-        score -= 8;
-      }
+    if (heartRate > heartRateBaseline * 1.45) {
+      return HealthStressCalculation(
+        stressValue: safeLastStress.roundToDouble(),
+        summary: '活动中，暂停压力判断',
+      );
     }
 
-    if (sleepMinutes > 0) {
-      if (sleepMinutes < 360) {
-        score += 18;
-      } else if (sleepMinutes < 420) {
-        score += 8;
-      } else if (sleepMinutes >= 480) {
-        score -= 7;
-      }
-    }
+    final heartRateDelta = (heartRate - heartRateBaseline) / heartRateBaseline;
+    final heartRateScore = (heartRateDelta / 0.30 * 100)
+        .clamp(0, 100)
+        .toDouble();
+    final hrvDelta = (hrvBaseline - hrv) / hrvBaseline;
+    final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
+    final rawStress = hrvScore * 0.65 + heartRateScore * 0.35;
+    final stress = (safeLastStress * 0.7 + rawStress * 0.3).clamp(0, 100);
 
-    if (steps > 0) {
-      if (steps < 1500) {
-        score += 8;
-      } else if (steps >= 7000) {
-        score -= 8;
-      }
-    }
-
-    return score;
+    return HealthStressCalculation(
+      stressValue: stress.roundToDouble(),
+      summary:
+          '$summary · 心率分 ${heartRateScore.round()} · HRV分 ${hrvScore.round()}',
+    );
   }
 
   String get summary {
@@ -7635,4 +7725,14 @@ class HealthStressStats {
     }
     return values.reduce((a, b) => a + b) / values.length;
   }
+}
+
+class HealthStressCalculation {
+  const HealthStressCalculation({
+    required this.stressValue,
+    required this.summary,
+  });
+
+  final double stressValue;
+  final String summary;
 }
