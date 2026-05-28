@@ -18,7 +18,22 @@ void main() {
     expect(find.text('moodland'), findsOneWidget);
     expect(find.text('38'), findsOneWidget);
     expect(find.text('轻微紧绷'), findsOneWidget);
+    expect(find.byTooltip('新手指引'), findsOneWidget);
     expect(find.text('恢复建议'), findsOneWidget);
+  });
+
+  testWidgets('stress home can open home guide overlay', (tester) async {
+    await tester.pumpWidget(
+      const MoodStressApp(enableHighFidelityIsland: false),
+    );
+
+    await tester.tap(find.byTooltip('新手指引'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('灯塔'), findsOneWidget);
+    expect(find.textContaining('点这里进入灯塔对话'), findsOneWidget);
+    expect(find.text('新手问题'), findsNothing);
   });
 
   testWidgets('stress home can switch sample health data', (tester) async {
@@ -205,13 +220,13 @@ void main() {
     expect(find.byTooltip('新对话'), findsOneWidget);
     expect(find.text('对话记录'), findsNothing);
     expect(find.text('旧消息'), findsNothing);
-    expect(find.text('你好，我是灯塔里的 moodland 助手。今天想聊些什么？'), findsOneWidget);
+    expect(find.text('你来了。我是灯塔，光还亮着。你慢慢说。'), findsOneWidget);
 
     await tester.tap(find.byTooltip('新对话'));
     await tester.pump();
 
     expect(find.text('旧消息'), findsNothing);
-    expect(find.text('你好，我是灯塔里的 moodland 助手。今天想聊些什么？'), findsOneWidget);
+    expect(find.text('你来了。我是灯塔，光还亮着。你慢慢说。'), findsOneWidget);
     await tester.tap(find.byTooltip('对话记录'));
     await tester.pumpAndSettle();
     expect(find.text(todayTitle), findsWidgets);
