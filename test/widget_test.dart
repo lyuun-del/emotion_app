@@ -192,6 +192,8 @@ void main() {
   });
 
   testWidgets('deepseek chat page starts a new conversation', (tester) async {
+    final now = DateTime.now();
+    final todayTitle = '${now.year}年${now.month}月${now.day}日';
     SharedPreferences.setMockInitialValues({
       'lighthouse_deepseek_chat_history': '[{"role":"user","content":"旧消息"}]',
     });
@@ -199,14 +201,20 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: DeepSeekChatPage()));
     await tester.pump();
 
-    expect(find.text('对话记录'), findsOneWidget);
-    expect(find.text('旧消息'), findsOneWidget);
+    expect(find.byTooltip('对话记录'), findsOneWidget);
+    expect(find.byTooltip('新对话'), findsOneWidget);
+    expect(find.text('对话记录'), findsNothing);
+    expect(find.text('旧消息'), findsNothing);
+    expect(find.text('你好，我是灯塔里的 moodland 助手。今天想聊些什么？'), findsOneWidget);
 
-    await tester.tap(find.text('新对话'));
+    await tester.tap(find.byTooltip('新对话'));
     await tester.pump();
 
     expect(find.text('旧消息'), findsNothing);
     expect(find.text('你好，我是灯塔里的 moodland 助手。今天想聊些什么？'), findsOneWidget);
+    await tester.tap(find.byTooltip('对话记录'));
+    await tester.pumpAndSettle();
+    expect(find.text(todayTitle), findsWidgets);
     expect(
       find.byWidgetPredicate(
         (widget) =>
@@ -231,9 +239,9 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: DeepSeekChatPage()));
     await tester.pump();
 
-    await tester.tap(find.text('新对话'));
+    await tester.tap(find.byTooltip('新对话'));
     await tester.pump();
-    await tester.tap(find.text('对话记录'));
+    await tester.tap(find.byTooltip('对话记录'));
     await tester.pumpAndSettle();
 
     expect(find.text('旧对话'), findsOneWidget);

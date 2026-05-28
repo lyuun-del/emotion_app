@@ -12,6 +12,27 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const _lighthouseAvatarAsset = 'assets/images/lighthouse_lamp_avatar.png';
 const _lighthouseAvatarPathKey = 'lighthouse_assistant_avatar_path';
+const _appIconChannel = MethodChannel('moodland/app_icon');
+
+class AppIconSwitcher {
+  const AppIconSwitcher._();
+
+  static Future<void> setMode(IslandVisualMode mode) async {
+    final iconName = switch (mode) {
+      IslandVisualMode.day => '',
+      IslandVisualMode.night => 'AppIconNight',
+    };
+    try {
+      await _appIconChannel.invokeMethod<void>('setAlternateIcon', {
+        'iconName': iconName,
+      });
+    } on MissingPluginException {
+      // Android and widget tests do not provide this channel.
+    } on PlatformException {
+      // Keep the app usable if iOS refuses an icon change.
+    }
+  }
+}
 
 void main() {
   runApp(const MoodStressApp());
@@ -135,6 +156,7 @@ class _StressHomePageState extends State<StressHomePage>
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_autoSwitchEnabledKey, false);
     await prefs.setString(_manualModeKey, mode.name);
+    unawaited(AppIconSwitcher.setMode(mode));
   }
 
   Future<void> _configureAutoSwitch() async {
@@ -164,6 +186,7 @@ class _StressHomePageState extends State<StressHomePage>
       _nightStartTime = schedule.nightStart;
       _islandMode = _modeForDateTime(now);
     });
+    unawaited(AppIconSwitcher.setMode(_islandMode));
     _saveAutoSwitchSettings();
     _scheduleNextAutoSwitch();
   }
@@ -180,6 +203,7 @@ class _StressHomePageState extends State<StressHomePage>
     final nextMode = _modeForDateTime(DateTime.now());
     if (nextMode != _islandMode) {
       setState(() => _islandMode = nextMode);
+      unawaited(AppIconSwitcher.setMode(nextMode));
     }
     _scheduleNextAutoSwitch();
   }
@@ -201,6 +225,7 @@ class _StressHomePageState extends State<StressHomePage>
       final nextMode = _modeForDateTime(DateTime.now());
       if (nextMode != _islandMode) {
         setState(() => _islandMode = nextMode);
+        unawaited(AppIconSwitcher.setMode(nextMode));
       }
       _scheduleNextAutoSwitch();
     });
@@ -4145,7 +4170,7 @@ class _HealthMetricDetailHeader extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE2ECE6)),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
             child: Text(
@@ -4448,13 +4473,29 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
     final loadedConversations = decodedConversations.isNotEmpty
         ? decodedConversations
         : _migrateLegacyConversation(legacySavedHistory);
-    final conversations = loadedConversations.isEmpty
-        ? [_createNewConversation()]
-        : loadedConversations;
-    final activeConversation = conversations.firstWhere(
-      (conversation) => conversation.id == savedActiveConversationId,
-      orElse: () => conversations.first,
+    final conversations = List<_ChatConversation>.from(loadedConversations);
+    final today = DateTime.now();
+    final todayId = _dailyConversationIdFor(today);
+    var activeConversationIndex = conversations.indexWhere(
+      (conversation) => conversation.id == todayId,
     );
+    if (activeConversationIndex == -1) {
+      final todayConversation = _createNewConversation(
+        id: todayId,
+        title: _dateTitleFor(today),
+      );
+      conversations.insert(0, todayConversation);
+      activeConversationIndex = 0;
+    } else {
+      final todayConversation = conversations.removeAt(activeConversationIndex);
+      conversations.insert(0, todayConversation);
+      activeConversationIndex = 0;
+    }
+    if (savedActiveConversationId == null ||
+        savedActiveConversationId.isEmpty) {
+      activeConversationIndex = 0;
+    }
+    final activeConversation = conversations[activeConversationIndex];
 
     if (!mounted) {
       return;
@@ -4489,8 +4530,11 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
       return;
     }
 
-    _conversations[index] = _conversations[index].copyWith(
-      title: _titleForMessages(_messages),
+    final previousConversation = _conversations[index];
+    _conversations[index] = previousConversation.copyWith(
+      title: _isDateTitle(previousConversation.title)
+          ? previousConversation.title
+          : _titleForMessages(_messages),
       messages: List<_ChatMessage>.from(_messages),
       updatedAt: DateTime.now(),
     );
@@ -4513,7 +4557,9 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
   }
 
   Future<void> _startNewChat() async {
-    final nextConversation = _createNewConversation();
+    final nextConversation = _createNewConversation(
+      title: _dateTitleFor(DateTime.now()),
+    );
     if (!mounted) {
       return;
     }
@@ -4590,14 +4636,18 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
     _scrollToBottom();
   }
 
-  _ChatConversation _createNewConversation({List<_ChatMessage>? messages}) {
+  _ChatConversation _createNewConversation({
+    List<_ChatMessage>? messages,
+    String? id,
+    String? title,
+  }) {
     final conversationMessages = messages == null || messages.isEmpty
         ? [_initialAssistantMessage]
         : messages;
     final now = DateTime.now();
     return _ChatConversation(
-      id: now.microsecondsSinceEpoch.toString(),
-      title: _titleForMessages(conversationMessages),
+      id: id ?? now.microsecondsSinceEpoch.toString(),
+      title: title ?? _titleForMessages(conversationMessages),
       messages: conversationMessages,
       updatedAt: now,
     );
@@ -4638,6 +4688,19 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
 
   void _sortConversations() {
     _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  }
+
+  String _dailyConversationIdFor(DateTime dateTime) {
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+    return 'daily-${dateTime.year}-${twoDigits(dateTime.month)}-${twoDigits(dateTime.day)}';
+  }
+
+  String _dateTitleFor(DateTime dateTime) {
+    return '${dateTime.year}年${dateTime.month}月${dateTime.day}日';
+  }
+
+  bool _isDateTitle(String title) {
+    return RegExp(r'^\d{4}年\d{1,2}月\d{1,2}日$').hasMatch(title);
   }
 
   String _titleForMessages(List<_ChatMessage> messages) {
@@ -4739,6 +4802,19 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
         backgroundColor: backgroundColor,
         foregroundColor: const Color(0xFF24302A),
         elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: '对话记录',
+            onPressed: _isLoadingHistory ? null : _showChatHistory,
+            icon: const Icon(Icons.history_rounded),
+          ),
+          IconButton(
+            tooltip: '新对话',
+            onPressed: _isLoadingHistory ? null : _startNewChat,
+            icon: const Icon(Icons.add_comment_rounded),
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: SafeArea(
         child: Column(
@@ -4761,41 +4837,6 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
                   ),
                 ),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _isLoadingHistory ? null : _showChatHistory,
-                      icon: const Icon(Icons.history_rounded, size: 18),
-                      label: const Text('对话记录'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF1C8E96),
-                        side: const BorderSide(color: Color(0xFFB7D9D3)),
-                        backgroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: const StadiumBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: _isLoadingHistory ? null : _startNewChat,
-                      icon: const Icon(Icons.add_comment_rounded, size: 18),
-                      label: const Text('新对话'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: accentColor,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: const StadiumBorder(),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
             Expanded(
               child: _isLoadingHistory
                   ? const Center(child: CircularProgressIndicator())
@@ -5117,7 +5158,7 @@ class _ChatBubble extends StatelessWidget {
         mainAxisAlignment: isUser
             ? MainAxisAlignment.end
             : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isUser) ...[
             _LighthouseAvatar(path: assistantAvatarPath, radius: 18),
