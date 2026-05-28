@@ -22,6 +22,19 @@ void main() {
     expect(find.text('恢复建议'), findsOneWidget);
   });
 
+  testWidgets('stress home opens recovery advice detail', (tester) async {
+    await tester.pumpWidget(
+      const MoodStressApp(enableHighFidelityIsland: false),
+    );
+
+    await tester.tap(find.text('恢复建议'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('可行的恢复建议'), findsOneWidget);
+    expect(find.text('当前压力值 38'), findsOneWidget);
+    expect(find.text('离开屏幕看远处'), findsOneWidget);
+  });
+
   testWidgets('stress home can open home guide overlay', (tester) async {
     await tester.pumpWidget(
       const MoodStressApp(enableHighFidelityIsland: false),

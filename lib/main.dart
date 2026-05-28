@@ -412,6 +412,19 @@ class _StressHomePageState extends State<StressHomePage>
     }
   }
 
+  void _openSupportAdvice() {
+    final profile = _profile;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => RecoveryAdvicePage(
+          profile: profile,
+          stressValue: _stressValue.round(),
+          generatedSuggestion: _aiSupportSuggestion ?? profile.suggestion,
+        ),
+      ),
+    );
+  }
+
   Future<String> _loadRecentLighthouseChatSummary() async {
     final prefs = await SharedPreferences.getInstance();
     final conversations = _decodeSupportConversations(
@@ -719,6 +732,8 @@ class _StressHomePageState extends State<StressHomePage>
                           size: cardSize,
                           aiSuggestion: _aiSupportSuggestion,
                           isLoading: _isLoadingSupportSuggestion,
+                          onRefresh: _refreshAiSupportSuggestion,
+                          onOpen: _openSupportAdvice,
                         ),
                       ),
                     ],
@@ -6818,6 +6833,8 @@ class _SupportCard extends StatelessWidget {
     required this.size,
     required this.aiSuggestion,
     required this.isLoading,
+    required this.onRefresh,
+    required this.onOpen,
   });
 
   final StressProfile profile;
@@ -6825,85 +6842,434 @@ class _SupportCard extends StatelessWidget {
   final double size;
   final String? aiSuggestion;
   final bool isLoading;
+  final VoidCallback onRefresh;
+  final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: size,
       height: 92,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: islandTheme.surfaceColor,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onOpen,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: islandTheme.surfaceBorderColor),
-          boxShadow: [
-            BoxShadow(
-              color: islandTheme.shadowColor,
-              blurRadius: 22,
-              offset: const Offset(0, 12),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: profile.accentColor.withValues(alpha: 0.14),
-                  ),
-                  child: Icon(
-                    Icons.psychology_alt_outlined,
-                    size: 17,
-                    color: profile.accentColor,
-                  ),
+          child: Ink(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: islandTheme.surfaceColor,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: islandTheme.surfaceBorderColor),
+              boxShadow: [
+                BoxShadow(
+                  color: islandTheme.shadowColor,
+                  blurRadius: 22,
+                  offset: const Offset(0, 12),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '恢复建议',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: islandTheme.primaryTextColor,
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: profile.accentColor.withValues(alpha: 0.14),
+                      ),
+                      child: Icon(
+                        Icons.psychology_alt_outlined,
+                        size: 17,
+                        color: profile.accentColor,
+                      ),
                     ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '恢复建议',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: islandTheme.primaryTextColor,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    SizedBox.square(
+                      dimension: 28,
+                      child: Tooltip(
+                        message: '重新生成',
+                        child: IconButton(
+                          onPressed: isLoading ? null : onRefresh,
+                          padding: EdgeInsets.zero,
+                          iconSize: 17,
+                          style: IconButton.styleFrom(
+                            backgroundColor: profile.accentColor.withValues(
+                              alpha: 0.12,
+                            ),
+                            foregroundColor: profile.accentColor,
+                            disabledBackgroundColor: islandTheme
+                                .surfaceBorderColor
+                                .withValues(alpha: 0.45),
+                            disabledForegroundColor: islandTheme
+                                .secondaryTextColor
+                                .withValues(alpha: 0.55),
+                          ),
+                          icon: isLoading
+                              ? SizedBox.square(
+                                  dimension: 13,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      islandTheme.secondaryTextColor,
+                                    ),
+                                  ),
+                                )
+                              : const Icon(Icons.refresh_rounded),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Expanded(
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 240),
+                    child: isLoading
+                        ? Text(
+                            '灯塔正在看最近的风向...',
+                            key: const ValueKey('support-loading'),
+                            overflow: TextOverflow.fade,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: islandTheme.secondaryTextColor,
+                                  height: 1.25,
+                                ),
+                          )
+                        : Text(
+                            aiSuggestion ?? profile.suggestion,
+                            key: ValueKey(aiSuggestion ?? profile.suggestion),
+                            overflow: TextOverflow.fade,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: islandTheme.secondaryTextColor,
+                                  height: 1.25,
+                                ),
+                          ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
-            Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 240),
-                child: isLoading
-                    ? Text(
-                        '灯塔正在看最近的风向...',
-                        key: const ValueKey('support-loading'),
-                        overflow: TextOverflow.fade,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: islandTheme.secondaryTextColor,
-                          height: 1.25,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class RecoveryAdvicePage extends StatelessWidget {
+  const RecoveryAdvicePage({
+    super.key,
+    required this.profile,
+    required this.stressValue,
+    required this.generatedSuggestion,
+  });
+
+  final StressProfile profile;
+  final int stressValue;
+  final String generatedSuggestion;
+
+  @override
+  Widget build(BuildContext context) {
+    final steps = RecoveryStep.forStressLevel(profile.imageIndex);
+
+    return Scaffold(
+      backgroundColor: profile.baseColor,
+      appBar: AppBar(
+        title: const Text('恢复建议'),
+        backgroundColor: profile.baseColor,
+        foregroundColor: const Color(0xFF26322B),
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+      ),
+      body: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.82),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: profile.accentColor.withValues(alpha: 0.18),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: profile.accentColor.withValues(alpha: 0.10),
+                    blurRadius: 24,
+                    offset: const Offset(0, 12),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: profile.accentColor.withValues(alpha: 0.14),
                         ),
-                      )
-                    : Text(
-                        aiSuggestion ?? profile.suggestion,
-                        key: ValueKey(aiSuggestion ?? profile.suggestion),
-                        overflow: TextOverflow.fade,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: islandTheme.secondaryTextColor,
-                          height: 1.25,
+                        child: Icon(
+                          profile.icon,
+                          color: profile.accentColor,
+                          size: 22,
                         ),
                       ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              profile.label,
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.w900,
+                                    color: const Color(0xFF26322B),
+                                  ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '当前压力值 $stressValue',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: const Color(0xFF667066),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    generatedSuggestion,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: const Color(0xFF2B332D),
+                      fontWeight: FontWeight.w800,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
               ),
             ),
+            const SizedBox(height: 22),
+            Text(
+              '可行的恢复建议',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w900,
+                color: const Color(0xFF26322B),
+              ),
+            ),
+            const SizedBox(height: 10),
+            for (final step in steps) ...[
+              _RecoveryStepCard(step: step, accentColor: profile.accentColor),
+              const SizedBox(height: 10),
+            ],
           ],
         ),
       ),
     );
+  }
+}
+
+class _RecoveryStepCard extends StatelessWidget {
+  const _RecoveryStepCard({required this.step, required this.accentColor});
+
+  final RecoveryStep step;
+  final Color accentColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accentColor.withValues(alpha: 0.14)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: accentColor.withValues(alpha: 0.12),
+            ),
+            child: Icon(step.icon, color: accentColor, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        step.title,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: const Color(0xFF26322B),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: accentColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        step.duration,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: accentColor,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  step.description,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: const Color(0xFF667066),
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class RecoveryStep {
+  const RecoveryStep({
+    required this.icon,
+    required this.title,
+    required this.duration,
+    required this.description,
+  });
+
+  final IconData icon;
+  final String title;
+  final String duration;
+  final String description;
+
+  static List<RecoveryStep> forStressLevel(int imageIndex) {
+    return switch (imageIndex) {
+      0 => const [
+        RecoveryStep(
+          icon: Icons.air_outlined,
+          title: '保留一个轻呼吸',
+          duration: '4分钟',
+          description: '用鼻子慢慢吸气、嘴巴轻轻呼气，不刻意追求很深，只让节奏变稳。',
+        ),
+        RecoveryStep(
+          icon: Icons.local_drink_outlined,
+          title: '补一口水',
+          duration: '1分钟',
+          description: '喝几口温水，顺便观察肩颈和手心有没有多余用力。',
+        ),
+        RecoveryStep(
+          icon: Icons.task_alt_outlined,
+          title: '继续当前节奏',
+          duration: '5分钟',
+          description: '把下一件事拆成一个很小的动作，保持现在这种舒服的速度。',
+        ),
+      ],
+      1 => const [
+        RecoveryStep(
+          icon: Icons.visibility_outlined,
+          title: '离开屏幕看远处',
+          duration: '2分钟',
+          description: '把视线移到窗外或远处物体，让眼睛和脑子从高密度信息里退一步。',
+        ),
+        RecoveryStep(
+          icon: Icons.self_improvement_outlined,
+          title: '放松肩颈',
+          duration: '3分钟',
+          description: '慢慢耸肩、落下，再轻转脖子；动作小一点，重点是让身体知道可以松开。',
+        ),
+        RecoveryStep(
+          icon: Icons.edit_note_outlined,
+          title: '写下一个卡住点',
+          duration: '3分钟',
+          description: '只写一句：我现在最在意的是…。写完后选一个能马上做的小步骤。',
+        ),
+      ],
+      2 => const [
+        RecoveryStep(
+          icon: Icons.air_outlined,
+          title: '4-7-8 呼吸',
+          duration: '4轮',
+          description: '吸气4拍、停7拍、呼气8拍。做不到完整节奏也没关系，呼气比吸气更慢就好。',
+        ),
+        RecoveryStep(
+          icon: Icons.directions_walk_outlined,
+          title: '短距离慢走',
+          duration: '3分钟',
+          description: '站起来走一小圈，注意脚掌接触地面的感觉，把注意力从脑内拉回身体。',
+        ),
+        RecoveryStep(
+          icon: Icons.notifications_off_outlined,
+          title: '暂停刺激源',
+          duration: '10分钟',
+          description: '临时关掉通知或离开当前页面，给神经系统一段不被打断的恢复时间。',
+        ),
+      ],
+      _ => const [
+        RecoveryStep(
+          icon: Icons.volume_off_outlined,
+          title: '先降低环境刺激',
+          duration: '2分钟',
+          description: '调低音量、放下耳机、远离通知或人群，让外界输入先变少。',
+        ),
+        RecoveryStep(
+          icon: Icons.chair_outlined,
+          title: '坐稳并找支撑',
+          duration: '5分钟',
+          description: '让背部或手臂有支撑，感受身体重量被承接，先不用急着解决问题。',
+        ),
+        RecoveryStep(
+          icon: Icons.favorite_border,
+          title: '联系一个安全的人',
+          duration: '可选',
+          description: '如果压力已经很难独自承受，给信任的人发一句：我现在有点撑不住，能陪我一下吗？',
+        ),
+      ],
+    };
   }
 }
 
