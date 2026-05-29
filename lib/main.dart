@@ -212,7 +212,6 @@ class _StressHomePageState extends State<StressHomePage>
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_autoSwitchEnabledKey, false);
     await prefs.setString(_manualModeKey, mode.name);
-    unawaited(AppIconSwitcher.setMode(mode));
   }
 
   Future<void> _configureAutoSwitch() async {

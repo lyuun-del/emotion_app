@@ -2,6 +2,8 @@ package com.luyutong.moodstress.mood_stress_app
 
 import android.content.ComponentName
 import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
@@ -26,23 +28,18 @@ class MainActivity : FlutterActivity() {
 
     private fun setLauncherIcon(useNightIcon: Boolean) {
         val packageManager = packageManager
-        val main = ComponentName(this, "$packageName.MainActivity")
         val dayAlias = ComponentName(this, "$packageName.MainActivityDayAlias")
         val nightAlias = ComponentName(this, "$packageName.MainActivityNightAlias")
         val enabled = PackageManager.COMPONENT_ENABLED_STATE_ENABLED
         val disabled = PackageManager.COMPONENT_ENABLED_STATE_DISABLED
         val flags = PackageManager.DONT_KILL_APP
 
-        packageManager.setComponentEnabledSetting(
-            main,
-            if (useNightIcon) disabled else enabled,
-            flags
-        )
-        packageManager.setComponentEnabledSetting(dayAlias, disabled, flags)
-        packageManager.setComponentEnabledSetting(
-            nightAlias,
-            if (useNightIcon) enabled else disabled,
-            flags
-        )
+        val enableAlias = if (useNightIcon) nightAlias else dayAlias
+        val disableAlias = if (useNightIcon) dayAlias else nightAlias
+
+        packageManager.setComponentEnabledSetting(enableAlias, enabled, flags)
+        Handler(Looper.getMainLooper()).postDelayed({
+            packageManager.setComponentEnabledSetting(disableAlias, disabled, flags)
+        }, 350)
     }
 }
