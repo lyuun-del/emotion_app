@@ -359,12 +359,18 @@ class _StressHomePageState extends State<StressHomePage>
       return;
     }
 
+    final savedAnswers = {
+      'submittedAt': DateTime.now().toIso8601String(),
+      ...answers,
+    };
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _newUserQuestionAnswersKey,
-      jsonEncode({'submittedAt': DateTime.now().toIso8601String(), ...answers}),
-    );
+    await prefs.setString(_newUserQuestionAnswersKey, jsonEncode(savedAnswers));
     await prefs.setBool(_newUserQuestionsCompletedKey, true);
+    final reply = await _appendOnboardingReplyToLighthouseChat(savedAnswers);
+    if (!mounted || reply == null) {
+      return;
+    }
+    _showLighthouseReplyBanner(context, reply);
   }
 
   void _openHomeGuide() {
@@ -3954,11 +3960,15 @@ class _UserHomePageState extends State<UserHomePage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_newUserQuestionAnswersKey, jsonEncode(savedAnswers));
     await prefs.setBool(_newUserQuestionsCompletedKey, true);
+    final reply = await _appendOnboardingReplyToLighthouseChat(savedAnswers);
     if (!mounted) {
       return;
     }
     setState(() => _answers = savedAnswers);
     _showUserHomeMessage('新手问题已更新');
+    if (reply != null) {
+      _showLighthouseReplyBanner(context, reply);
+    }
   }
 
   void _showUserHomeMessage(String message) {
@@ -6484,6 +6494,20 @@ class _DeepSeekChatClient {
     ]);
   }
 
+  Future<String> onboardingReply({required String userProfileContext}) async {
+    final systemPrompt = [
+      '你是 moodland 应用里的灯塔。用户刚完成新手问题，你需要根据答案对用户做一个初步了解。',
+      '请直接给用户一条第一句回复，让用户感觉你已经大致理解了 TA 的近期状态。',
+      '要求：中文，2 到 3 句，总字数不超过 90 字；温柔、沉静、具体；可以自然提到压力来源、情绪或放松偏好。',
+      '不要逐项复述问卷，不要说“根据你的问卷”，不要诊断，不要过度承诺，不要使用“你应该”或“你最好”。',
+    ].join('\n');
+
+    return _sendRawMessages([
+      {'role': 'system', 'content': systemPrompt},
+      {'role': 'user', 'content': userProfileContext},
+    ]);
+  }
+
   Future<String> send(
     List<_ChatMessage> messages, {
     required String? userProfileContext,
@@ -6560,6 +6584,279 @@ class _DeepSeekChatException implements Exception {
   const _DeepSeekChatException(this.message);
 
   final String message;
+}
+
+Future<String?> _appendOnboardingReplyToLighthouseChat(
+  Map<String, Object?> answers,
+) async {
+  final profileContext = _formatNewUserAnswersForAi(answers);
+  final reply = await _generateOnboardingReply(profileContext, answers);
+  final now = DateTime.now();
+  final prefs = await SharedPreferences.getInstance();
+  final conversations = _decodeStoredChatConversations(
+    prefs.getString(_DeepSeekChatPageState._chatConversationsKey),
+  );
+  final todayId = _dailyLighthouseConversationId(now);
+  var todayIndex = conversations.indexWhere(
+    (conversation) => conversation.id == todayId,
+  );
+  if (todayIndex == -1) {
+    conversations.insert(
+      0,
+      _ChatConversation(
+        id: todayId,
+        title: _dateTitleForLighthouseConversation(now),
+        messages: [
+          _DeepSeekChatPageState._initialAssistantMessage,
+          _ChatMessage(role: _ChatRole.assistant, content: reply),
+        ],
+        updatedAt: now,
+      ),
+    );
+  } else {
+    final todayConversation = conversations[todayIndex];
+    conversations[todayIndex] = todayConversation.copyWith(
+      messages: [
+        ...todayConversation.messages,
+        _ChatMessage(role: _ChatRole.assistant, content: reply),
+      ],
+      updatedAt: now,
+    );
+  }
+  conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  await prefs.setString(
+    _DeepSeekChatPageState._chatConversationsKey,
+    jsonEncode(
+      conversations.map((conversation) => conversation.toJson()).toList(),
+    ),
+  );
+  await prefs.setString(
+    _DeepSeekChatPageState._activeChatConversationIdKey,
+    todayId,
+  );
+  return reply;
+}
+
+Future<String> _generateOnboardingReply(
+  String profileContext,
+  Map<String, Object?> answers,
+) async {
+  if (_homeDeepSeekApiKey.isEmpty ||
+      _homeDeepSeekModel.isEmpty ||
+      WidgetsBinding.instance.runtimeType.toString().contains('Test')) {
+    return _localOnboardingReply(answers);
+  }
+
+  try {
+    return await _DeepSeekChatClient(
+      apiKey: _homeDeepSeekApiKey,
+      model: _homeDeepSeekModel,
+      apiUrl: _homeDeepSeekApiUrl,
+    ).onboardingReply(userProfileContext: profileContext);
+  } catch (_) {
+    return _localOnboardingReply(answers);
+  }
+}
+
+String _localOnboardingReply(Map<String, Object?> answers) {
+  final nickname = _answerTextFromMap(answers, 'nickname', fallback: '');
+  final emotions = _answerTextFromMap(answers, 'emotions');
+  final pressure = _answerTextFromMap(answers, 'pressureSources');
+  final relaxation = _answerTextFromMap(answers, 'relaxationMethods');
+  final namePrefix = nickname.isEmpty ? '' : '$nickname，';
+  return [
+    '$namePrefix我大概看见你最近被$emotions围绕，压力也和$pressure有关。',
+    '先不用急着整理清楚，灯塔会在这里陪你一点点靠岸。${relaxation == '未填写' ? '' : '之后我也会记得你喜欢用$relaxation放松。'}',
+  ].join('');
+}
+
+String _formatNewUserAnswersForAi(Map<String, Object?> answers) {
+  return [
+    '新用户问卷答案：',
+    '常见情绪：${_answerTextFromMap(answers, 'emotions')}',
+    '负面情绪频率：${_answerTextFromMap(answers, 'negativeFrequency')}',
+    '压力来源：${_answerTextFromMap(answers, 'pressureSources')}',
+    '压力分数：${_answerTextFromMap(answers, 'stressScore')}',
+    '生日：${_answerTextFromMap(answers, 'birthday')}',
+    '放松方式：${_answerTextFromMap(answers, 'relaxationMethods')}',
+    '昵称：${_answerTextFromMap(answers, 'nickname')}',
+  ].join('\n');
+}
+
+String _answerTextFromMap(
+  Map<String, Object?> answers,
+  String key, {
+  String fallback = '未填写',
+}) {
+  final value = answers[key];
+  if (value is List) {
+    final joined = value.whereType<String>().join('、');
+    return joined.trim().isEmpty ? fallback : joined;
+  }
+  if (value == null || value.toString().trim().isEmpty) {
+    return fallback;
+  }
+  return value.toString();
+}
+
+List<_ChatConversation> _decodeStoredChatConversations(String? raw) {
+  if (raw == null || raw.isEmpty) {
+    return [];
+  }
+
+  try {
+    final data = jsonDecode(raw);
+    if (data is! List) {
+      return [];
+    }
+    final conversations = [
+      for (final item in data)
+        if (item is Map<String, dynamic>) _ChatConversation.fromJson(item),
+    ];
+    conversations.removeWhere((conversation) => conversation.messages.isEmpty);
+    conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return conversations;
+  } catch (_) {
+    return [];
+  }
+}
+
+String _dailyLighthouseConversationId(DateTime dateTime) {
+  String twoDigits(int value) => value.toString().padLeft(2, '0');
+  return 'daily-${dateTime.year}-${twoDigits(dateTime.month)}-${twoDigits(dateTime.day)}';
+}
+
+String _dateTitleForLighthouseConversation(DateTime dateTime) {
+  return '${dateTime.year}年${dateTime.month}月${dateTime.day}日';
+}
+
+OverlayEntry? _lighthouseReplyBannerEntry;
+
+void _showLighthouseReplyBanner(BuildContext context, String message) {
+  if (context.findAncestorWidgetOfExactType<DeepSeekChatPage>() != null) {
+    return;
+  }
+
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  if (overlay == null) {
+    return;
+  }
+
+  _lighthouseReplyBannerEntry?.remove();
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (overlayContext) {
+      return _LighthouseReplyBanner(
+        message: message,
+        onTap: () {
+          entry.remove();
+          if (identical(_lighthouseReplyBannerEntry, entry)) {
+            _lighthouseReplyBannerEntry = null;
+          }
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (context) => const DeepSeekChatPage(),
+            ),
+          );
+        },
+        onDismiss: () {
+          entry.remove();
+          if (identical(_lighthouseReplyBannerEntry, entry)) {
+            _lighthouseReplyBannerEntry = null;
+          }
+        },
+      );
+    },
+  );
+
+  _lighthouseReplyBannerEntry = entry;
+  overlay.insert(entry);
+  Timer(const Duration(seconds: 5), () {
+    if (identical(_lighthouseReplyBannerEntry, entry)) {
+      entry.remove();
+      _lighthouseReplyBannerEntry = null;
+    }
+  });
+}
+
+class _LighthouseReplyBanner extends StatelessWidget {
+  const _LighthouseReplyBanner({
+    required this.message,
+    required this.onTap,
+    required this.onDismiss,
+  });
+
+  final String message;
+  final VoidCallback onTap;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+          child: Material(
+            color: Colors.transparent,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1D3436).withValues(alpha: 0.96),
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.18),
+                    blurRadius: 22,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: onTap,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+                  child: Row(
+                    children: [
+                      _LighthouseAvatar(path: null, radius: 15),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          message,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            decoration: TextDecoration.none,
+                            fontSize: 14,
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '关闭',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: onDismiss,
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class MyGardenPage extends StatefulWidget {
