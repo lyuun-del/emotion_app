@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moodland/main.dart';
@@ -20,7 +22,20 @@ void main() {
     expect(find.text('38'), findsOneWidget);
     expect(find.text('轻微紧绷'), findsOneWidget);
     expect(find.byTooltip('新手指引'), findsOneWidget);
+    expect(find.byTooltip('个人中心'), findsOneWidget);
     expect(find.text('恢复建议'), findsOneWidget);
+  });
+
+  testWidgets('home profile button opens user center', (tester) async {
+    await tester.pumpWidget(
+      const MoodStressApp(enableHighFidelityIsland: false),
+    );
+
+    await tester.tap(find.byTooltip('个人中心'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('我的主页'), findsOneWidget);
+    expect(find.text('编辑个人资料'), findsOneWidget);
   });
 
   testWidgets('stress home opens recovery advice detail', (tester) async {
@@ -179,6 +194,74 @@ void main() {
     expect(find.text('喝点水吧。身体里的每片叶子都在等这口水。'), findsOneWidget);
   });
 
+  testWidgets('garden page shows flower selection history', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'new_user_questions_completed': true,
+      'home_guide_completed': true,
+      'selected_garden_flower_name': '铃兰',
+      'garden_selection_history': jsonEncode([
+        {
+          'id': '1',
+          'flowerName': '铃兰',
+          'mood': '低落',
+          'meaning': '想哭就哭吧，你的眼泪和你的笑容一样珍贵。',
+          'message': '灯塔把这朵铃兰放在窗边，先陪你安静一会儿。',
+          'createdAt': '2026-05-29T09:30:00.000',
+        },
+      ]),
+    });
+
+    await tester.pumpWidget(const MaterialApp(home: MyGardenPage()));
+    await tester.pumpAndSettle();
+
+    expect(find.text('我的花园'), findsOneWidget);
+    expect(find.text('低落 · 铃兰'), findsWidgets);
+
+    await tester.scrollUntilVisible(
+      find.text('选择历史'),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
+
+    expect(find.text('选择历史'), findsOneWidget);
+    expect(find.text('灯塔回信'), findsOneWidget);
+    expect(find.text('灯塔把这朵铃兰放在窗边，先陪你安静一会儿。'), findsWidgets);
+  });
+
+  testWidgets('garden reply opens lighthouse chat with flower context', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({
+      'new_user_questions_completed': true,
+      'home_guide_completed': true,
+      'selected_garden_flower_name': '铃兰',
+      'garden_selection_history': jsonEncode([
+        {
+          'id': 'garden-record-1',
+          'flowerName': '铃兰',
+          'mood': '低落',
+          'meaning': '想哭就哭吧，你的眼泪和你的笑容一样珍贵。',
+          'message': '灯塔把这朵铃兰放在窗边，先陪你安静一会儿。',
+          'createdAt': '2026-05-29T09:30:00.000',
+        },
+      ]),
+    });
+
+    await tester.pumpWidget(const MaterialApp(home: MyGardenPage()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('灯塔把这朵铃兰放在窗边，先陪你安静一会儿。').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('灯塔对话'), findsOneWidget);
+    expect(find.text('我的情绪状态：低落\n对应的花：铃兰'), findsOneWidget);
+    expect(find.text('灯塔把这朵铃兰放在窗边，先陪你安静一会儿。'), findsOneWidget);
+  });
+
   testWidgets(
     'wooden house opens health dashboard and avatar opens user page',
     (tester) async {
@@ -247,6 +330,12 @@ void main() {
 
       expect(find.text('我的主页'), findsOneWidget);
       expect(find.text('个人信息'), findsOneWidget);
+      expect(find.text('编辑个人资料'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('软件设置'),
+        220,
+        scrollable: find.byType(Scrollable).last,
+      );
       expect(find.text('软件设置'), findsOneWidget);
       expect(find.text('灯塔头像'), findsOneWidget);
       expect(find.text('更改'), findsOneWidget);
@@ -271,9 +360,36 @@ void main() {
     );
     await tester.pump();
 
+    await tester.scrollUntilVisible(
+      find.text('灯塔头像'),
+      220,
+      scrollable: find.byType(Scrollable).last,
+    );
     expect(find.text('灯塔头像'), findsOneWidget);
     expect(find.text('更改'), findsOneWidget);
     expect(find.text('恢复默认'), findsOneWidget);
+  });
+
+  testWidgets('user page can edit profile name and bio', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'new_user_questions_completed': true,
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: UserHomePage(currentEstimate: null)),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('编辑个人资料'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.widgetWithText(TextField, '名字'), '小鹿');
+    await tester.enterText(find.widgetWithText(TextField, '个人信息'), '喜欢安静地恢复能量');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('小鹿'), findsOneWidget);
+    expect(find.text('喜欢安静地恢复能量'), findsOneWidget);
   });
 
   testWidgets('user page can reopen new user questions from settings', (

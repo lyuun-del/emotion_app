@@ -12,6 +12,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const _lighthouseAvatarAsset = 'assets/images/lighthouse_lamp_avatar.png';
 const _lighthouseAvatarPathKey = 'lighthouse_assistant_avatar_path';
+const _userAvatarPathKey = 'user_avatar_path';
+const _userDisplayNameKey = 'user_display_name';
+const _userBioKey = 'user_bio';
 const _appIconChannel = MethodChannel('moodland/app_icon');
 const _homeDeepSeekApiKey = String.fromEnvironment('DEEPSEEK_API_KEY');
 const _homeDeepSeekModel = String.fromEnvironment(
@@ -103,6 +106,7 @@ class _StressHomePageState extends State<StressHomePage>
   Timer? _autoSwitchTimer;
   int? _homeGuideStep;
   int _supportSuggestionRequestId = 0;
+  int _userProfileRefreshToken = 0;
 
   StressProfile get _profile => StressProfile.fromValue(_stressValue);
   bool get _isShowingHomeGuide => _homeGuideStep != null;
@@ -454,6 +458,19 @@ class _StressHomePageState extends State<StressHomePage>
     );
   }
 
+  Future<void> _openUserHome() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) =>
+            UserHomePage(currentEstimate: _latestHealthEstimate),
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() => _userProfileRefreshToken++);
+  }
+
   Future<String> _loadRecentLighthouseChatSummary() async {
     final prefs = await SharedPreferences.getInstance();
     final conversations = _decodeSupportConversations(
@@ -727,9 +744,12 @@ class _StressHomePageState extends State<StressHomePage>
                               autoSwitchEnabled: _autoSwitchEnabled,
                               dayStartTime: _dayStartTime,
                               nightStartTime: _nightStartTime,
+                              userProfileRefreshToken: _userProfileRefreshToken,
                               onIslandModeChanged: _setIslandMode,
                               onAutoSwitchSelected: _configureAutoSwitch,
                               onTutorialSelected: _openHomeGuide,
+                              onProfileSelected: () =>
+                                  unawaited(_openUserHome()),
                             ),
                           ),
                           const Expanded(child: SizedBox.expand()),
@@ -1407,9 +1427,11 @@ class _HomeHeader extends StatelessWidget {
     required this.autoSwitchEnabled,
     required this.dayStartTime,
     required this.nightStartTime,
+    required this.userProfileRefreshToken,
     required this.onIslandModeChanged,
     required this.onAutoSwitchSelected,
     required this.onTutorialSelected,
+    required this.onProfileSelected,
   });
 
   final StressProfile profile;
@@ -1419,13 +1441,16 @@ class _HomeHeader extends StatelessWidget {
   final bool autoSwitchEnabled;
   final TimeOfDay dayStartTime;
   final TimeOfDay nightStartTime;
+  final int userProfileRefreshToken;
   final ValueChanged<IslandVisualMode> onIslandModeChanged;
   final VoidCallback onAutoSwitchSelected;
   final VoidCallback onTutorialSelected;
+  final VoidCallback onProfileSelected;
 
   @override
   Widget build(BuildContext context) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
           child: Column(
@@ -1471,7 +1496,78 @@ class _HomeHeader extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(width: 10),
+        _HomeProfileButton(
+          key: ValueKey(userProfileRefreshToken),
+          islandTheme: islandTheme,
+          onPressed: onProfileSelected,
+        ),
       ],
+    );
+  }
+}
+
+class _HomeProfileButton extends StatefulWidget {
+  const _HomeProfileButton({
+    super.key,
+    required this.islandTheme,
+    required this.onPressed,
+  });
+
+  final IslandVisualTheme islandTheme;
+  final VoidCallback onPressed;
+
+  @override
+  State<_HomeProfileButton> createState() => _HomeProfileButtonState();
+}
+
+class _HomeProfileButtonState extends State<_HomeProfileButton> {
+  String? _avatarPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAvatar();
+  }
+
+  Future<void> _loadAvatar() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _avatarPath = prefs.getString(_userAvatarPathKey));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: '个人中心',
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: widget.onPressed,
+          child: Container(
+            width: 42,
+            height: 42,
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: widget.islandTheme.surfaceColor,
+              border: Border.all(color: widget.islandTheme.surfaceBorderColor),
+              boxShadow: [
+                BoxShadow(
+                  color: widget.islandTheme.shadowColor,
+                  blurRadius: 16,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: _UserAvatar(path: _avatarPath, radius: 18),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -3689,8 +3785,12 @@ class _UserHomePageState extends State<UserHomePage> {
 
   Map<String, dynamic>? _answers;
   String? _assistantAvatarPath;
+  String? _userAvatarPath;
+  String? _displayName;
+  String? _bio;
   bool _isLoading = true;
   bool _isPickingAssistantAvatar = false;
+  bool _isPickingUserAvatar = false;
 
   @override
   void initState() {
@@ -3702,6 +3802,9 @@ class _UserHomePageState extends State<UserHomePage> {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_newUserQuestionAnswersKey);
     final assistantAvatarPath = prefs.getString(_lighthouseAvatarPathKey);
+    final userAvatarPath = prefs.getString(_userAvatarPathKey);
+    final displayName = prefs.getString(_userDisplayNameKey);
+    final bio = prefs.getString(_userBioKey);
     Map<String, dynamic>? answers;
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
@@ -3715,8 +3818,75 @@ class _UserHomePageState extends State<UserHomePage> {
     setState(() {
       _answers = answers;
       _assistantAvatarPath = assistantAvatarPath;
+      _userAvatarPath = userAvatarPath;
+      _displayName = displayName;
+      _bio = bio;
       _isLoading = false;
     });
+  }
+
+  Future<void> _changeUserAvatar() async {
+    if (_isPickingUserAvatar) {
+      return;
+    }
+
+    setState(() => _isPickingUserAvatar = true);
+    try {
+      final image = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 720,
+        imageQuality: 88,
+        requestFullMetadata: false,
+      );
+      if (image == null) {
+        _showUserHomeMessage('没有选择新头像');
+        return;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_userAvatarPathKey, image.path);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _userAvatarPath = image.path);
+      _showUserHomeMessage('头像已更新');
+    } on PlatformException catch (error) {
+      _showUserHomeMessage('无法打开相册：${error.message ?? error.code}');
+    } catch (_) {
+      _showUserHomeMessage('无法打开相册，请检查相册权限后再试。');
+    } finally {
+      if (mounted) {
+        setState(() => _isPickingUserAvatar = false);
+      }
+    }
+  }
+
+  Future<void> _editUserProfile() async {
+    final currentName = _displayName?.trim().isNotEmpty == true
+        ? _displayName!.trim()
+        : _answerText('nickname', fallback: '');
+    final result = await showDialog<_UserProfileEditResult>(
+      context: context,
+      builder: (context) => _UserProfileEditDialog(
+        initialName: currentName,
+        initialBio: _bio ?? '',
+      ),
+    );
+    if (result == null) {
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_userDisplayNameKey, result.name);
+    await prefs.setString(_userBioKey, result.bio);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _displayName = result.name;
+      _bio = result.bio;
+    });
+    _showUserHomeMessage('个人资料已更新');
   }
 
   Future<void> _changeAssistantAvatar() async {
@@ -3818,8 +3988,11 @@ class _UserHomePageState extends State<UserHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final nickname = _answerText('nickname', fallback: 'moodland 用户');
+    final nickname = _displayName?.trim().isNotEmpty == true
+        ? _displayName!.trim()
+        : _answerText('nickname', fallback: 'moodland 用户');
     final stressScore = _answerText('stressScore');
+    final bio = _bio?.trim().isNotEmpty == true ? _bio!.trim() : '还没有填写个人简介。';
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FFF4),
@@ -3835,13 +4008,25 @@ class _UserHomePageState extends State<UserHomePage> {
           children: [
             _UserProfileHeader(
               nickname: nickname,
+              bio: bio,
+              avatarPath: _userAvatarPath,
               stressScore: stressScore,
               isLoading: _isLoading,
+              isPickingAvatar: _isPickingUserAvatar,
+              onAvatarTap: _changeUserAvatar,
+              onEditTap: _editUserProfile,
             ),
             const SizedBox(height: 16),
             _UserHomeSection(
               title: '个人信息',
               children: [
+                _SettingsActionTile(
+                  icon: Icons.edit_outlined,
+                  title: '编辑个人资料',
+                  subtitle: '修改名字和个人信息；点击上方头像可更换头像。',
+                  onTap: _editUserProfile,
+                ),
+                const SizedBox(height: 12),
                 _UserInfoRow(
                   icon: Icons.cake_outlined,
                   label: '生日',
@@ -3912,16 +4097,145 @@ class _UserHomePageState extends State<UserHomePage> {
   }
 }
 
+class _UserAvatar extends StatelessWidget {
+  const _UserAvatar({required this.path, required this.radius});
+
+  final String? path;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final customPath = path;
+    final diameter = radius * 2;
+
+    return ClipOval(
+      child: Container(
+        width: diameter,
+        height: diameter,
+        color: const Color(0xFF5C9B72).withValues(alpha: 0.14),
+        child: customPath == null || customPath.isEmpty
+            ? Icon(
+                Icons.person_rounded,
+                color: const Color(0xFF5C9B72),
+                size: radius * 1.05,
+              )
+            : Image.file(
+                File(customPath),
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Icon(
+                  Icons.person_rounded,
+                  color: const Color(0xFF5C9B72),
+                  size: radius * 1.05,
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+class _UserProfileEditResult {
+  const _UserProfileEditResult({required this.name, required this.bio});
+
+  final String name;
+  final String bio;
+}
+
+class _UserProfileEditDialog extends StatefulWidget {
+  const _UserProfileEditDialog({
+    required this.initialName,
+    required this.initialBio,
+  });
+
+  final String initialName;
+  final String initialBio;
+
+  @override
+  State<_UserProfileEditDialog> createState() => _UserProfileEditDialogState();
+}
+
+class _UserProfileEditDialogState extends State<_UserProfileEditDialog> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _bioController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName);
+    _bioController = TextEditingController(text: widget.initialBio);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _bioController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('编辑个人资料'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _nameController,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(labelText: '名字'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _bioController,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: '个人信息',
+              hintText: '写一句关于自己的状态、偏好或想被怎样陪伴。',
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final name = _nameController.text.trim();
+            Navigator.of(context).pop(
+              _UserProfileEditResult(
+                name: name.isEmpty ? 'moodland 用户' : name,
+                bio: _bioController.text.trim(),
+              ),
+            );
+          },
+          child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
 class _UserProfileHeader extends StatelessWidget {
   const _UserProfileHeader({
     required this.nickname,
+    required this.bio,
+    required this.avatarPath,
     required this.stressScore,
     required this.isLoading,
+    required this.isPickingAvatar,
+    required this.onAvatarTap,
+    required this.onEditTap,
   });
 
   final String nickname;
+  final String bio;
+  final String? avatarPath;
   final String stressScore;
   final bool isLoading;
+  final bool isPickingAvatar;
+  final VoidCallback onAvatarTap;
+  final VoidCallback onEditTap;
 
   @override
   Widget build(BuildContext context) {
@@ -3934,17 +4248,39 @@ class _UserProfileHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Container(
-            width: 60,
-            height: 60,
-            decoration: BoxDecoration(
-              color: const Color(0xFF5C9B72).withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(30),
-            ),
-            child: const Icon(
-              Icons.person_rounded,
-              color: Color(0xFF5C9B72),
-              size: 32,
+          GestureDetector(
+            onTap: isPickingAvatar ? null : onAvatarTap,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                _UserAvatar(path: avatarPath, radius: 30),
+                Positioned(
+                  right: -2,
+                  bottom: -2,
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF5C9B72),
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                    child: isPickingAvatar
+                        ? const Padding(
+                            padding: EdgeInsets.all(5),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.photo_camera_outlined,
+                            color: Colors.white,
+                            size: 13,
+                          ),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(width: 14),
@@ -3962,6 +4298,17 @@ class _UserProfileHeader extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
+                  bio,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF60736C),
+                    fontWeight: FontWeight.w700,
+                    height: 1.25,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
                   '问卷压力分数：$stressScore',
                   style: const TextStyle(
                     color: Color(0xFF60736C),
@@ -3970,6 +4317,11 @@ class _UserProfileHeader extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+          IconButton(
+            tooltip: '编辑个人资料',
+            onPressed: onEditTap,
+            icon: const Icon(Icons.edit_outlined, color: Color(0xFF5C9B72)),
           ),
         ],
       ),
@@ -5122,7 +5474,18 @@ class _HealthTrendChartPainter extends CustomPainter {
 }
 
 class DeepSeekChatPage extends StatefulWidget {
-  const DeepSeekChatPage({super.key});
+  const DeepSeekChatPage({
+    super.key,
+    this.initialGardenRecordId,
+    this.initialGardenMood,
+    this.initialGardenFlowerName,
+    this.initialGardenReply,
+  });
+
+  final String? initialGardenRecordId;
+  final String? initialGardenMood;
+  final String? initialGardenFlowerName;
+  final String? initialGardenReply;
 
   @override
   State<DeepSeekChatPage> createState() => _DeepSeekChatPageState();
@@ -5285,6 +5648,19 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
         savedActiveConversationId.isEmpty) {
       activeConversationIndex = 0;
     }
+    final gardenMessages = _initialGardenMessages();
+    if (gardenMessages != null) {
+      final activeConversation = conversations[activeConversationIndex];
+      if (!_conversationContainsGardenMessages(
+        activeConversation.messages,
+        gardenMessages,
+      )) {
+        conversations[activeConversationIndex] = activeConversation.copyWith(
+          messages: [...activeConversation.messages, ...gardenMessages],
+          updatedAt: DateTime.now(),
+        );
+      }
+    }
     final activeConversation = conversations[activeConversationIndex];
 
     if (!mounted) {
@@ -5305,6 +5681,54 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
     });
     await _saveConversations();
     _scrollToBottom();
+  }
+
+  List<_ChatMessage>? _initialGardenMessages() {
+    final recordId = widget.initialGardenRecordId;
+    final mood = widget.initialGardenMood?.trim();
+    final flowerName = widget.initialGardenFlowerName?.trim();
+    final reply = widget.initialGardenReply?.trim();
+    if (recordId == null ||
+        recordId.isEmpty ||
+        mood == null ||
+        mood.isEmpty ||
+        flowerName == null ||
+        flowerName.isEmpty ||
+        reply == null ||
+        reply.isEmpty) {
+      return null;
+    }
+
+    return [
+      _ChatMessage(
+        role: _ChatRole.user,
+        content: '我的情绪状态：$mood\n对应的花：$flowerName',
+      ),
+      _ChatMessage(role: _ChatRole.assistant, content: reply),
+    ];
+  }
+
+  bool _conversationContainsGardenMessages(
+    List<_ChatMessage> messages,
+    List<_ChatMessage> gardenMessages,
+  ) {
+    if (gardenMessages.length != 2 || messages.length < 2) {
+      return false;
+    }
+
+    for (
+      var index = 0;
+      index <= messages.length - gardenMessages.length;
+      index++
+    ) {
+      if (messages[index].role == gardenMessages[0].role &&
+          messages[index].content == gardenMessages[0].content &&
+          messages[index + 1].role == gardenMessages[1].role &&
+          messages[index + 1].content == gardenMessages[1].content) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Future<void> _saveChatHistory() async {
@@ -6031,6 +6455,35 @@ class _DeepSeekChatClient {
     ]);
   }
 
+  Future<String> gardenReflection({
+    required _GardenFlower flower,
+    required List<_GardenSelectionRecord> recentHistory,
+  }) async {
+    final systemPrompt = [
+      '你是 moodland 应用里的灯塔。用户在“我的花园”里选择了一朵代表此刻心情的花。',
+      '请根据花、心情、花语和最近选择历史，生成一段很短的陪伴文字。',
+      '要求：只输出中文，1 到 2 句，总字数不超过 48 字；温柔、具体、克制；不要诊断，不要说教。',
+      '可以轻轻呼应花园、花、光、海等意象，但不要堆砌。',
+    ].join('\n');
+    final historyText = recentHistory
+        .take(5)
+        .map((record) {
+          return '${_formatMonthDayTime(record.createdAt)} ${record.mood}·${record.flowerName}';
+        })
+        .join('\n');
+    final userPrompt = [
+      '这次选择：${flower.mood} · ${flower.name}',
+      '花语：${flower.meaning}',
+      if (historyText.isNotEmpty) '最近选择历史：\n$historyText',
+      '请给这次选择写一句灯塔回信。',
+    ].join('\n\n');
+
+    return _sendRawMessages([
+      {'role': 'system', 'content': systemPrompt},
+      {'role': 'user', 'content': userPrompt},
+    ]);
+  }
+
   Future<String> send(
     List<_ChatMessage> messages, {
     required String? userProfileContext,
@@ -6118,6 +6571,7 @@ class MyGardenPage extends StatefulWidget {
 
 class _MyGardenPageState extends State<MyGardenPage> {
   static const _selectedGardenFlowerKey = 'selected_garden_flower_name';
+  static const _gardenSelectionHistoryKey = 'garden_selection_history';
 
   static const _flowers = [
     _GardenFlower(
@@ -6213,26 +6667,60 @@ class _MyGardenPageState extends State<MyGardenPage> {
   ];
 
   _GardenFlower? _selectedFlower;
+  List<_GardenSelectionRecord> _history = [];
+  bool _isGeneratingGardenMessage = false;
 
   @override
   void initState() {
     super.initState();
-    _loadSelectedFlower();
+    _loadGardenState();
   }
 
-  Future<void> _loadSelectedFlower() async {
+  Future<void> _loadGardenState() async {
     final prefs = await SharedPreferences.getInstance();
+    final rawHistory = prefs.getString(_gardenSelectionHistoryKey);
+    final history = <_GardenSelectionRecord>[];
+    if (rawHistory != null && rawHistory.isNotEmpty) {
+      final decoded = jsonDecode(rawHistory);
+      if (decoded is List) {
+        history.addAll(
+          decoded
+              .whereType<Map<String, Object?>>()
+              .map(_GardenSelectionRecord.fromJson)
+              .where((record) => record.flowerName.isNotEmpty),
+        );
+      }
+    }
+
     final savedName = prefs.getString(_selectedGardenFlowerKey);
     if (savedName == null || !mounted) {
+      if (mounted) {
+        setState(() => _history = history);
+      }
       return;
     }
 
     for (final flower in _flowers) {
       if (flower.name == savedName) {
-        setState(() => _selectedFlower = flower);
+        setState(() {
+          _selectedFlower = flower;
+          _history = history;
+        });
         return;
       }
     }
+
+    if (mounted) {
+      setState(() => _history = history);
+    }
+  }
+
+  Future<void> _saveGardenHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _gardenSelectionHistoryKey,
+      jsonEncode(_history.map((record) => record.toJson()).toList()),
+    );
   }
 
   Future<void> _selectMood() async {
@@ -6285,10 +6773,79 @@ class _MyGardenPageState extends State<MyGardenPage> {
     );
 
     if (selected != null) {
-      setState(() => _selectedFlower = selected);
+      final initialRecord = _GardenSelectionRecord(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        flowerName: selected.name,
+        mood: selected.mood,
+        meaning: selected.meaning,
+        message: _localGardenReflection(selected),
+        createdAt: DateTime.now(),
+      );
+      setState(() {
+        _selectedFlower = selected;
+        _history = [initialRecord, ..._history].take(30).toList();
+      });
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_selectedGardenFlowerKey, selected.name);
+      await _saveGardenHistory();
+      await _generateGardenReflection(selected, initialRecord.id);
     }
+  }
+
+  Future<void> _generateGardenReflection(
+    _GardenFlower flower,
+    String recordId,
+  ) async {
+    if (_homeDeepSeekApiKey.isEmpty || _homeDeepSeekModel.isEmpty) {
+      return;
+    }
+
+    setState(() => _isGeneratingGardenMessage = true);
+    try {
+      final message = await _DeepSeekChatClient(
+        apiKey: _homeDeepSeekApiKey,
+        model: _homeDeepSeekModel,
+        apiUrl: _homeDeepSeekApiUrl,
+      ).gardenReflection(flower: flower, recentHistory: _history);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _history = _history.map((record) {
+          if (record.id != recordId) {
+            return record;
+          }
+          return record.copyWith(message: message);
+        }).toList();
+      });
+      await _saveGardenHistory();
+    } on Object {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('灯塔暂时没有连上，已先保存本地花语。')));
+    } finally {
+      if (mounted) {
+        setState(() => _isGeneratingGardenMessage = false);
+      }
+    }
+  }
+
+  void _openGardenChat(_GardenSelectionRecord record) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => DeepSeekChatPage(
+          initialGardenRecordId: record.id,
+          initialGardenMood: record.mood,
+          initialGardenFlowerName: record.flowerName,
+          initialGardenReply: record.message.trim().isEmpty
+              ? record.meaning
+              : record.message,
+        ),
+      ),
+    );
   }
 
   @override
@@ -6310,6 +6867,20 @@ class _MyGardenPageState extends State<MyGardenPage> {
                 child: _SelectedFlowerCard(
                   flower: _selectedFlower,
                   onSelectMood: _selectMood,
+                  latestRecord: _history.isEmpty ? null : _history.first,
+                  isGeneratingMessage: _isGeneratingGardenMessage,
+                  onOpenLatestRecord: _history.isEmpty
+                      ? null
+                      : () => _openGardenChat(_history.first),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                child: _GardenHistoryPanel(
+                  history: _history,
+                  onOpenRecord: _openGardenChat,
                 ),
               ),
             ),
@@ -6349,11 +6920,73 @@ class _GardenFlower {
   final String meaning;
 }
 
+class _GardenSelectionRecord {
+  const _GardenSelectionRecord({
+    required this.id,
+    required this.flowerName,
+    required this.mood,
+    required this.meaning,
+    required this.message,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String flowerName;
+  final String mood;
+  final String meaning;
+  final String message;
+  final DateTime createdAt;
+
+  _GardenSelectionRecord copyWith({String? message}) {
+    return _GardenSelectionRecord(
+      id: id,
+      flowerName: flowerName,
+      mood: mood,
+      meaning: meaning,
+      message: message ?? this.message,
+      createdAt: createdAt,
+    );
+  }
+
+  Map<String, Object?> toJson() {
+    return {
+      'id': id,
+      'flowerName': flowerName,
+      'mood': mood,
+      'meaning': meaning,
+      'message': message,
+      'createdAt': createdAt.toIso8601String(),
+    };
+  }
+
+  factory _GardenSelectionRecord.fromJson(Map<String, Object?> json) {
+    return _GardenSelectionRecord(
+      id: json['id'] as String? ?? '',
+      flowerName: json['flowerName'] as String? ?? '',
+      mood: json['mood'] as String? ?? '',
+      meaning: json['meaning'] as String? ?? '',
+      message: json['message'] as String? ?? '',
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+          DateTime.now(),
+    );
+  }
+}
+
 class _SelectedFlowerCard extends StatelessWidget {
-  const _SelectedFlowerCard({required this.flower, required this.onSelectMood});
+  const _SelectedFlowerCard({
+    required this.flower,
+    required this.onSelectMood,
+    required this.latestRecord,
+    required this.isGeneratingMessage,
+    required this.onOpenLatestRecord,
+  });
 
   final _GardenFlower? flower;
   final VoidCallback onSelectMood;
+  final _GardenSelectionRecord? latestRecord;
+  final bool isGeneratingMessage;
+  final VoidCallback? onOpenLatestRecord;
 
   @override
   Widget build(BuildContext context) {
@@ -6442,7 +7075,145 @@ class _SelectedFlowerCard extends StatelessWidget {
             )
           else
             _FlowerInfoLine(title: '花语', content: flower!.meaning),
+          if (flower != null) ...[
+            const SizedBox(height: 10),
+            _FlowerInfoLine(
+              title: isGeneratingMessage ? '灯塔正在写信' : '灯塔回信',
+              content: latestRecord?.message.trim().isNotEmpty == true
+                  ? latestRecord!.message
+                  : _localGardenReflection(flower!),
+              onTap: onOpenLatestRecord,
+            ),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+class _GardenHistoryPanel extends StatelessWidget {
+  const _GardenHistoryPanel({
+    required this.history,
+    required this.onOpenRecord,
+  });
+
+  final List<_GardenSelectionRecord> history;
+  final ValueChanged<_GardenSelectionRecord> onOpenRecord;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 14,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '选择历史',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: const Color(0xFF24302A),
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (history.isEmpty)
+            const Text(
+              '还没有选择记录。每次选花后，灯塔都会把这次心情收进花园。',
+              style: TextStyle(
+                color: Color(0xFF587171),
+                height: 1.4,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          else
+            for (final record in history.take(8)) ...[
+              _GardenHistoryTile(
+                record: record,
+                onTap: () => onOpenRecord(record),
+              ),
+              if (record != history.take(8).last) const SizedBox(height: 8),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+class _GardenHistoryTile extends StatelessWidget {
+  const _GardenHistoryTile({required this.record, required this.onTap});
+
+  final _GardenSelectionRecord record;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFF1FAF5),
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFDCEFE4)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${record.mood} · ${record.flowerName}',
+                      style: const TextStyle(
+                        color: Color(0xFF24302A),
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    _formatMonthDayTime(record.createdAt),
+                    style: const TextStyle(
+                      color: Color(0xFF7A8E88),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Icon(
+                    Icons.forum_outlined,
+                    color: Color(0xFF1C8E96),
+                    size: 17,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                record.message.trim().isEmpty ? record.meaning : record.message,
+                style: const TextStyle(
+                  color: Color(0xFF587171),
+                  height: 1.35,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -6516,15 +7287,32 @@ class _GardenFlowerTile extends StatelessWidget {
   }
 }
 
+String _localGardenReflection(_GardenFlower flower) {
+  return '灯塔收下了这朵${flower.name}。${flower.meaning}';
+}
+
+String _formatMonthDayTime(DateTime value) {
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  final hour = value.hour.toString().padLeft(2, '0');
+  final minute = value.minute.toString().padLeft(2, '0');
+  return '$month/$day $hour:$minute';
+}
+
 class _FlowerInfoLine extends StatelessWidget {
-  const _FlowerInfoLine({required this.title, required this.content});
+  const _FlowerInfoLine({
+    required this.title,
+    required this.content,
+    this.onTap,
+  });
 
   final String title;
   final String content;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final child = Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -6554,6 +7342,20 @@ class _FlowerInfoLine extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+
+    if (onTap == null) {
+      return child;
+    }
+
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: child,
       ),
     );
   }
