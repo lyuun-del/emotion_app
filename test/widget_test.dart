@@ -130,8 +130,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('57'), findsOneWidget);
-    expect(find.text('压力偏高'), findsOneWidget);
+    expect(find.text('100'), findsOneWidget);
+    expect(find.text('需要恢复'), findsOneWidget);
     expect(find.textContaining('测试数据 · 压力偏高'), findsOneWidget);
 
     await tester.tap(find.text('使用测试数据'));
@@ -141,8 +141,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('70'), findsOneWidget);
-    expect(find.text('压力偏高'), findsOneWidget);
+    expect(find.text('100'), findsOneWidget);
+    expect(find.text('需要恢复'), findsOneWidget);
     expect(find.textContaining('测试数据 · 需要恢复'), findsOneWidget);
   });
 

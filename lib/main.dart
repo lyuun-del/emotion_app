@@ -468,10 +468,13 @@ class _StressHomePageState extends State<StressHomePage>
   }
 
   void _openStressMetricDetail() {
+    final estimate = _latestHealthEstimate;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => _HealthMetricDetailPage(
-          metric: HealthDataDashboardPage._stressMetricForValue(_stressValue),
+          metric: estimate == null
+              ? HealthDataDashboardPage._stressMetricForValue(_stressValue)
+              : HealthDataDashboardPage._stressMetricForEstimate(estimate),
         ),
       ),
     );
@@ -4821,6 +4824,15 @@ class HealthDataDashboardPage extends StatefulWidget {
     );
   }
 
+  static _HealthMetric _stressMetricForEstimate(HealthStressEstimate estimate) {
+    final samples = estimate.stats.stressSamples;
+    return _stressMetricForValue(estimate.stressValue).copyWith(
+      samples: samples.isNotEmpty
+          ? samples
+          : [HealthChartPoint(DateTime.now(), estimate.stressValue)],
+    );
+  }
+
   static String _formatMonthDay(DateTime date) => '${date.month}/${date.day}';
 }
 
@@ -4915,14 +4927,7 @@ class _HealthDataDashboardPageState extends State<HealthDataDashboardPage> {
     final profile = StressProfile.fromValue(estimate.stressValue);
     final stats = estimate.stats;
     final metrics = [
-      HealthDataDashboardPage._stressMetricForValue(estimate.stressValue)
-          .copyWith(
-            samples: stats.stressSamples.isNotEmpty
-                ? stats.stressSamples
-                : [
-                    HealthChartPoint(DateTime.now(), estimate.stressValue),
-                  ],
-          ),
+      HealthDataDashboardPage._stressMetricForEstimate(estimate),
       _HealthMetric(
         label: '心率',
         value: '${stats.averageHeartRate?.round() ?? 0}',
@@ -8196,23 +8201,36 @@ class _StressValueCapsule extends StatelessWidget {
                   ),
                 ),
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                  mainAxisSize: MainAxisSize.max,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
-                      '$roundedValue',
-                      style: Theme.of(context).textTheme.headlineMedium
-                          ?.copyWith(
-                            fontWeight: FontWeight.w900,
-                            color: islandTheme.primaryTextColor,
-                          ),
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          '$roundedValue',
+                          maxLines: 1,
+                          style: Theme.of(context).textTheme.headlineMedium
+                              ?.copyWith(
+                                fontWeight: FontWeight.w900,
+                                color: islandTheme.primaryTextColor,
+                              ),
+                        ),
+                      ),
                     ),
                     const SizedBox(width: 8),
-                    Text(
-                      '压力值',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: islandTheme.secondaryTextColor,
-                        fontWeight: FontWeight.w800,
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          '压力值',
+                          maxLines: 1,
+                          style: Theme.of(context).textTheme.labelLarge
+                              ?.copyWith(
+                                color: islandTheme.secondaryTextColor,
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
                       ),
                     ),
                   ],
@@ -9430,7 +9448,7 @@ class HealthStressStats {
     final hrvDelta = (currentHrvBaseline - currentHrv) / currentHrvBaseline;
     final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
     final rawStress = hrvScore * 0.65 + heartRateScore * 0.35;
-    final stress = (safeLastStress * 0.7 + rawStress * 0.3).clamp(0, 100);
+    final stress = rawStress.clamp(0, 100);
 
     return HealthStressCalculation(
       stressValue: stress.roundToDouble(),
@@ -9525,14 +9543,14 @@ class HealthStressStats {
     }
 
     final pairedSamples = <HealthChartPoint>[];
-    var smoothedStress = lastStress.clamp(0, 100).toDouble();
+    final pausedStress = lastStress.clamp(0, 100).toDouble();
     for (final heartRate in heartRateSamples) {
       final hrv = _nearestSample(hrvSamples, heartRate.time);
       if (hrv == null) {
         continue;
       }
       if (heartRate.value > resolvedHeartRateBaseline * 1.45) {
-        pairedSamples.add(HealthChartPoint(heartRate.time, smoothedStress));
+        pairedSamples.add(HealthChartPoint(heartRate.time, pausedStress));
         continue;
       }
       final heartRateDelta =
@@ -9544,10 +9562,9 @@ class HealthStressStats {
       final hrvDelta = (hrvBaseline - hrv.value) / hrvBaseline;
       final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
       final rawStress = hrvScore * 0.65 + heartRateScore * 0.35;
-      smoothedStress = (smoothedStress * 0.7 + rawStress * 0.3)
-          .clamp(0, 100)
-          .toDouble();
-      pairedSamples.add(HealthChartPoint(heartRate.time, smoothedStress));
+      pairedSamples.add(
+        HealthChartPoint(heartRate.time, rawStress.clamp(0, 100).toDouble()),
+      );
     }
 
     return HealthStressStats(
