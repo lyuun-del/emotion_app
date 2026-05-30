@@ -601,18 +601,18 @@ class _StressHomePageState extends State<StressHomePage>
         return;
       }
       setState(() => _healthSyncSummary = error.message);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
+      _showHealthSyncResult(error.message);
     } catch (_) {
       if (!mounted) {
         return;
       }
-      const message = '暂时无法读取健康数据，请确认 HealthKit 权限和真机数据。';
+      final message = Platform.isAndroid
+          ? '暂时无法读取 Health Connect 数据。现在可先手动录入或使用测试数据。'
+          : '暂时无法读取健康数据，请确认 HealthKit 权限和真机数据。';
       setState(() => _healthSyncSummary = message);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text(message)));
+      ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
       if (mounted) {
         setState(() => _isSyncingHealth = false);
@@ -621,11 +621,13 @@ class _StressHomePageState extends State<StressHomePage>
   }
 
   void _showHealthSyncResult(String message) {
-    if (message.startsWith('数据不足')) {
+    if (message.startsWith('数据不足') ||
+        message.contains('Health Connect') ||
+        message.contains('没有可用的心率')) {
       showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('数据不足'),
+          title: Text(message.startsWith('数据不足') ? '数据不足' : '暂无健康数据'),
           content: Text(message),
           actions: [
             TextButton(
@@ -9174,11 +9176,24 @@ class HealthStressEstimator {
     final health = Health();
     await health.configure();
 
+    if (Platform.isAndroid) {
+      final status = await health.getHealthConnectSdkStatus();
+      if (status != HealthConnectSdkStatus.sdkAvailable) {
+        throw const HealthStressPermissionException(
+          'Android Health Connect 暂不可用：请安装或更新 Health Connect，并在系统里允许 MoodLand 读取健康数据。现在可先手动录入或使用测试数据。',
+        );
+      }
+    }
+
     final availableTypes = _types
         .where((type) => health.isDataTypeAvailable(type))
         .toList();
     if (availableTypes.isEmpty) {
-      throw const HealthStressPermissionException('当前设备暂不支持读取健康数据。');
+      throw HealthStressPermissionException(
+        Platform.isAndroid
+            ? '当前安卓设备没有可读取的 Health Connect 数据类型。现在可先手动录入或使用测试数据。'
+            : '当前设备暂不支持读取健康数据。',
+      );
     }
 
     final permissions = List<HealthDataAccess>.filled(
@@ -9190,7 +9205,11 @@ class HealthStressEstimator {
       permissions: permissions,
     );
     if (!authorized) {
-      throw const HealthStressPermissionException('需要允许读取健康数据后才能同步压力值。');
+      throw HealthStressPermissionException(
+        Platform.isAndroid
+            ? '需要在 Health Connect 中允许 MoodLand 读取心率、HRV、睡眠和步数。现在可先手动录入或使用测试数据。'
+            : '需要允许读取健康数据后才能同步压力值。',
+      );
     }
 
     final now = DateTime.now();
@@ -9216,8 +9235,10 @@ class HealthStressEstimator {
     final mergedStats = stats.mergeManualEntries(recentManualEntries);
     if (!stats.hasAnySignal) {
       if (recentManualEntries.isEmpty) {
-        throw const HealthStressPermissionException(
-          '近 24 小时没有可用的心率、HRV、睡眠或步数数据。',
+        throw HealthStressPermissionException(
+          Platform.isAndroid
+              ? 'Health Connect 近 24 小时没有可用的心率、HRV、睡眠或步数数据。现在可先手动录入或使用测试数据。'
+              : '近 24 小时没有可用的心率、HRV、睡眠或步数数据。',
         );
       }
     }
