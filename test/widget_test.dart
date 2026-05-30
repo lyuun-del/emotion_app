@@ -262,90 +262,74 @@ void main() {
     expect(find.text('灯塔把这朵铃兰放在窗边，先陪你安静一会儿。'), findsOneWidget);
   });
 
-  testWidgets(
-    'wooden house opens health dashboard and avatar opens user page',
-    (tester) async {
-      final estimate = const HealthStressEstimator().sampleEstimate(
-        HealthStressEstimator.samples[2],
-      );
+  testWidgets('wooden house opens health dashboard and manual entry page', (
+    tester,
+  ) async {
+    final estimate = const HealthStressEstimator().sampleEstimate(
+      HealthStressEstimator.samples[2],
+    );
 
-      await tester.pumpWidget(
-        MaterialApp(home: HealthDataDashboardPage(currentEstimate: estimate)),
-      );
+    await tester.pumpWidget(
+      MaterialApp(home: HealthDataDashboardPage(currentEstimate: estimate)),
+    );
 
-      expect(find.text('健康数据详情'), findsOneWidget);
-      expect(find.text('当前压力趋势'), findsOneWidget);
-      expect(find.byTooltip('用户主页'), findsOneWidget);
-      expect(find.text('压力值'), findsOneWidget);
-      expect(find.text('心率'), findsOneWidget);
-      expect(find.text('0点'), findsWidgets);
+    expect(find.text('健康数据详情'), findsOneWidget);
+    expect(find.text('当前压力趋势'), findsOneWidget);
+    expect(find.byTooltip('手动记录'), findsOneWidget);
+    expect(find.text('压力值'), findsOneWidget);
+    expect(find.text('心率'), findsOneWidget);
+    expect(find.text('暂无真实数据'), findsWidgets);
 
-      await tester.tap(
-        find
-            .ancestor(of: find.text('心率'), matching: find.byType(InkWell))
-            .first,
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(
+      find.ancestor(of: find.text('心率'), matching: find.byType(InkWell)).first,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
 
-      expect(find.text('时间范围'), findsOneWidget);
-      expect(find.text('显示精度'), findsOneWidget);
-      expect(find.text('一天内 · 标准显示'), findsOneWidget);
+    expect(find.text('时间范围'), findsOneWidget);
+    expect(find.text('显示精度'), findsOneWidget);
+    expect(find.text('一天内 · 标准显示'), findsOneWidget);
 
-      await tester.tap(find.text('月'));
-      await tester.pump();
-      await tester.tap(find.text('精细'));
-      await tester.pump();
+    await tester.tap(find.text('月'));
+    await tester.pump();
+    await tester.tap(find.text('精细'));
+    await tester.pump();
 
-      expect(find.text('一个月内 · 精细显示'), findsOneWidget);
+    expect(find.text('一个月内 · 精细显示'), findsOneWidget);
 
-      await tester.tap(find.byTooltip('Back').last);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.byTooltip('Back').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
 
-      await tester.scrollUntilVisible(
-        find.text('HRV'),
-        180,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(find.text('HRV'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('HRV'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('HRV'), findsOneWidget);
 
-      await tester.scrollUntilVisible(
-        find.text('睡眠'),
-        220,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(find.text('睡眠'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('睡眠'),
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('睡眠'), findsOneWidget);
 
-      await tester.scrollUntilVisible(
-        find.text('步数'),
-        260,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(find.text('步数'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('步数'),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('步数'), findsOneWidget);
 
-      await tester.tap(find.byTooltip('用户主页'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.byTooltip('手动记录'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
 
-      expect(find.text('我的主页'), findsOneWidget);
-      expect(find.text('个人信息'), findsOneWidget);
-      expect(find.text('编辑个人资料'), findsOneWidget);
-      await tester.scrollUntilVisible(
-        find.text('软件设置'),
-        220,
-        scrollable: find.byType(Scrollable).last,
-      );
-      expect(find.text('软件设置'), findsOneWidget);
-      expect(find.text('灯塔头像'), findsOneWidget);
-      expect(find.text('更改'), findsOneWidget);
-      expect(find.text('新手问题'), findsOneWidget);
-      expect(find.text('隐私与权限'), findsOneWidget);
-      expect(find.text('本地数据'), findsOneWidget);
-      expect(find.text('应用版本'), findsOneWidget);
-      expect(find.byIcon(Icons.monitor_heart_rounded), findsNothing);
-    },
-  );
+    expect(find.text('手动记录'), findsOneWidget);
+    expect(find.text('最近的心率 HR'), findsOneWidget);
+    expect(find.text('当前 HRV'), findsOneWidget);
+  });
 
   testWidgets('user page can show restore default lighthouse avatar action', (
     tester,

@@ -15,6 +15,8 @@ const _lighthouseAvatarPathKey = 'lighthouse_assistant_avatar_path';
 const _userAvatarPathKey = 'user_avatar_path';
 const _userDisplayNameKey = 'user_display_name';
 const _userBioKey = 'user_bio';
+const _testHealthDataEnabledKey = 'test_health_data_enabled';
+const _manualHealthEntriesKey = 'manual_health_entries';
 const _appIconChannel = MethodChannel('moodland/app_icon');
 const _homeDeepSeekApiKey = String.fromEnvironment('DEEPSEEK_API_KEY');
 const _homeDeepSeekModel = String.fromEnvironment(
@@ -96,6 +98,7 @@ class _StressHomePageState extends State<StressHomePage>
   MoodOption? _selectedMood;
   IslandVisualMode _islandMode = IslandVisualMode.day;
   bool _autoSwitchEnabled = false;
+  bool _testHealthDataEnabled = true;
   bool _isSyncingHealth = false;
   bool _isLoadingSupportSuggestion = false;
   String? _healthSyncSummary;
@@ -152,9 +155,20 @@ class _StressHomePageState extends State<StressHomePage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadAutoSwitchSettings();
+    _loadTestHealthDataSetting();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showFirstLaunchGuideIfNeeded();
       _refreshAiSupportSuggestion();
+    });
+  }
+
+  Future<void> _loadTestHealthDataSetting() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _testHealthDataEnabled = prefs.getBool(_testHealthDataEnabledKey) ?? true;
     });
   }
 
@@ -473,6 +487,7 @@ class _StressHomePageState extends State<StressHomePage>
     if (!mounted) {
       return;
     }
+    await _loadTestHealthDataSetting();
     setState(() => _userProfileRefreshToken++);
   }
 
@@ -577,9 +592,7 @@ class _StressHomePageState extends State<StressHomePage>
         _aiSupportSuggestion = null;
       });
       unawaited(_refreshAiSupportSuggestion());
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(result.summary)));
+      _showHealthSyncResult(result.summary);
     } on HealthStressPermissionException catch (error) {
       if (!mounted) {
         return;
@@ -602,6 +615,29 @@ class _StressHomePageState extends State<StressHomePage>
         setState(() => _isSyncingHealth = false);
       }
     }
+  }
+
+  void _showHealthSyncResult(String message) {
+    if (message.startsWith('数据不足')) {
+      showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('数据不足'),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _showSampleHealthDataSheet() async {
@@ -781,6 +817,7 @@ class _StressHomePageState extends State<StressHomePage>
                               isSyncing: _isSyncingHealth,
                               summary: _healthSyncSummary,
                               accentColor: islandTheme.controlAccentColor,
+                              testDataEnabled: _testHealthDataEnabled,
                               onPressed: _syncHealthStress,
                               onSamplePressed: _showSampleHealthDataSheet,
                             ),
@@ -2911,49 +2948,48 @@ class _PhraseReferenceAccordion extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 14),
-      decoration: BoxDecoration(
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Material(
         color: Colors.white.withValues(alpha: 0.9),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 16,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          leading: const Icon(
-            Icons.menu_book_outlined,
-            color: Color(0xFF5C9B72),
-          ),
-          title: const Text(
-            '完整预设提醒语句速查表',
-            style: TextStyle(
-              color: Color(0xFF24302A),
-              fontSize: 16,
-              fontWeight: FontWeight.w900,
+        elevation: 2,
+        shadowColor: Colors.black.withValues(alpha: 0.08),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: Colors.white),
+        ),
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            tilePadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 4,
             ),
-          ),
-          subtitle: const Text(
-            '展开查看全部分类语句',
-            style: TextStyle(
-              color: Color(0xFF587171),
-              fontWeight: FontWeight.w700,
+            childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            leading: const Icon(
+              Icons.menu_book_outlined,
+              color: Color(0xFF5C9B72),
             ),
+            title: const Text(
+              '完整预设提醒语句速查表',
+              style: TextStyle(
+                color: Color(0xFF24302A),
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            subtitle: const Text(
+              '展开查看全部分类语句',
+              style: TextStyle(
+                color: Color(0xFF587171),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            children: [
+              for (final section in _groupReminderPhraseSections())
+                _PhraseReferenceSection(section: section),
+            ],
           ),
-          children: [
-            for (final section in _groupReminderPhraseSections())
-              _PhraseReferenceSection(section: section),
-          ],
         ),
       ),
     );
@@ -3793,6 +3829,7 @@ class _UserHomePageState extends State<UserHomePage> {
   String? _userAvatarPath;
   String? _displayName;
   String? _bio;
+  bool _testHealthDataEnabled = true;
   bool _isLoading = true;
   bool _isPickingAssistantAvatar = false;
   bool _isPickingUserAvatar = false;
@@ -3810,6 +3847,8 @@ class _UserHomePageState extends State<UserHomePage> {
     final userAvatarPath = prefs.getString(_userAvatarPathKey);
     final displayName = prefs.getString(_userDisplayNameKey);
     final bio = prefs.getString(_userBioKey);
+    final testHealthDataEnabled =
+        prefs.getBool(_testHealthDataEnabledKey) ?? true;
     Map<String, dynamic>? answers;
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
@@ -3826,8 +3865,19 @@ class _UserHomePageState extends State<UserHomePage> {
       _userAvatarPath = userAvatarPath;
       _displayName = displayName;
       _bio = bio;
+      _testHealthDataEnabled = testHealthDataEnabled;
       _isLoading = false;
     });
+  }
+
+  Future<void> _setTestHealthDataEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_testHealthDataEnabledKey, enabled);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _testHealthDataEnabled = enabled);
+    _showUserHomeMessage(enabled ? '已开启测试数据' : '已关闭测试数据，只显示真实数据');
   }
 
   Future<void> _changeUserAvatar() async {
@@ -4078,6 +4128,14 @@ class _UserHomePageState extends State<UserHomePage> {
                   title: '新手问题',
                   subtitle: '重新回答情绪、压力和偏好问题，让灯塔更了解你。',
                   onTap: _retakeNewUserQuestions,
+                ),
+                const SizedBox(height: 10),
+                _SettingsSwitchTile(
+                  icon: Icons.science_outlined,
+                  title: '测试数据',
+                  subtitle: '关闭后首页不再显示测试数据入口，只保留真实与手动健康数据。',
+                  value: _testHealthDataEnabled,
+                  onChanged: _setTestHealthDataEnabled,
                 ),
                 const SizedBox(height: 10),
                 _SettingsInfoTile(
@@ -4545,6 +4603,66 @@ class _SettingsActionTile extends StatelessWidget {
   }
 }
 
+class _SettingsSwitchTile extends StatelessWidget {
+  const _SettingsSwitchTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FCF7),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE4EFE5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: const Color(0xFF5C9B72), size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Color(0xFF24302A),
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: Color(0xFF60736C),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Switch(value: value, onChanged: onChanged),
+        ],
+      ),
+    );
+  }
+}
+
 class _AssistantAvatarSettingsTile extends StatelessWidget {
   const _AssistantAvatarSettingsTile({
     required this.avatarPath,
@@ -4678,24 +4796,133 @@ class _LighthouseAvatar extends StatelessWidget {
   }
 }
 
-class HealthDataDashboardPage extends StatelessWidget {
+class HealthDataDashboardPage extends StatefulWidget {
   const HealthDataDashboardPage({super.key, required this.currentEstimate});
 
   final HealthStressEstimate? currentEstimate;
 
   @override
+  State<HealthDataDashboardPage> createState() =>
+      _HealthDataDashboardPageState();
+
+  static _HealthMetric _stressMetricForValue(double stressValue) {
+    final profile = StressProfile.fromValue(stressValue);
+    final now = DateTime.now();
+    return _HealthMetric(
+      label: '压力值',
+      value: '${stressValue.round()}',
+      unit: '%',
+      color: profile.accentColor,
+      defaultRange: _HealthMetricRange.day,
+      baseValue: stressValue,
+      spread: 7,
+      tilt: 3,
+      samples: [HealthChartPoint(now, stressValue)],
+    );
+  }
+
+  static String _formatMonthDay(DateTime date) => '${date.month}/${date.day}';
+}
+
+class _HealthDataDashboardPageState extends State<HealthDataDashboardPage> {
+  HealthStressEstimate? _manualEstimate;
+  bool _testHealthDataEnabled = true;
+
+  HealthStressEstimate? get _currentEstimate =>
+      _manualEstimate ?? widget.currentEstimate;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTestHealthDataSetting();
+  }
+
+  Future<void> _loadTestHealthDataSetting() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _testHealthDataEnabled = prefs.getBool(_testHealthDataEnabledKey) ?? true;
+    });
+  }
+
+  Future<void> _openManualEntry() async {
+    final entry = await Navigator.of(context).push<ManualHealthEntry>(
+      MaterialPageRoute<ManualHealthEntry>(
+        builder: (context) => const _ManualHealthEntryPage(),
+      ),
+    );
+    if (entry == null) {
+      return;
+    }
+
+    await ManualHealthEntryStore.add(entry);
+    final stats = HealthStressStats(
+      averageHeartRate: entry.heartRate,
+      averageRestingHeartRate: null,
+      averageHrv: entry.hrv,
+      steps: _currentEstimate?.stats.steps ?? 0,
+      sleepMinutes: _currentEstimate?.stats.sleepMinutes ?? 0,
+      heartRateSamples: [
+        ...?_currentEstimate?.stats.heartRateSamples,
+        if (entry.heartRate != null)
+          HealthChartPoint(entry.createdAt, entry.heartRate!),
+      ],
+      hrvSamples: [
+        ...?_currentEstimate?.stats.hrvSamples,
+        if (entry.hrv != null) HealthChartPoint(entry.createdAt, entry.hrv!),
+      ],
+      sleepSamples: _currentEstimate?.stats.sleepSamples ?? const [],
+      stepSamples: _currentEstimate?.stats.stepSamples ?? const [],
+    );
+    final calculation = stats.calculateStress(
+      heartRateBaseline: _currentEstimate?.stats.averageRestingHeartRate,
+      hrvBaseline: _currentEstimate?.stats.averageHrv,
+      lastStress: _currentEstimate?.stressValue ?? 38,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _manualEstimate = HealthStressEstimate(
+        stressValue: calculation.stressValue,
+        summary: '手动记录：${calculation.summary}',
+        stats: stats,
+      );
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final estimate =
-        currentEstimate ??
-        const HealthStressEstimator().sampleEstimate(
-          HealthStressEstimator.samples[1],
-        );
+        _currentEstimate ??
+        (_testHealthDataEnabled
+            ? const HealthStressEstimator().sampleEstimate(
+                HealthStressEstimator.samples[1],
+              )
+            : const HealthStressEstimate(
+                stressValue: 38,
+                summary: '暂无真实健康数据，请同步 HealthKit 或手动记录。',
+                stats: HealthStressStats(
+                  averageHeartRate: null,
+                  averageRestingHeartRate: null,
+                  averageHrv: null,
+                  steps: 0,
+                  sleepMinutes: 0,
+                ),
+              ));
     final profile = StressProfile.fromValue(estimate.stressValue);
     final stats = estimate.stats;
-    final dayLabels = _dayTimeLabels();
-    final weekLabels = _weekDateLabels(DateTime.now());
     final metrics = [
-      _stressMetricForValue(estimate.stressValue),
+      HealthDataDashboardPage._stressMetricForValue(estimate.stressValue)
+          .copyWith(
+            samples: stats.stressSamples.isNotEmpty
+                ? stats.stressSamples
+                : [
+                    HealthChartPoint(DateTime.now(), estimate.stressValue),
+                  ],
+          ),
       _HealthMetric(
         label: '心率',
         value: '${stats.averageHeartRate?.round() ?? 0}',
@@ -4705,8 +4932,7 @@ class HealthDataDashboardPage extends StatelessWidget {
         baseValue: stats.averageHeartRate ?? 72,
         spread: 9,
         tilt: 5,
-        points: _seriesAround(stats.averageHeartRate ?? 72, 9, 5),
-        axisLabels: dayLabels,
+        samples: stats.heartRateSamples,
       ),
       _HealthMetric(
         label: 'HRV',
@@ -4717,8 +4943,7 @@ class HealthDataDashboardPage extends StatelessWidget {
         baseValue: stats.averageHrv ?? 42,
         spread: 7,
         tilt: -4,
-        points: _seriesAround(stats.averageHrv ?? 42, 7, -4),
-        axisLabels: dayLabels,
+        samples: stats.hrvSamples,
       ),
       _HealthMetric(
         label: '睡眠',
@@ -4729,8 +4954,9 @@ class HealthDataDashboardPage extends StatelessWidget {
         baseValue: stats.sleepMinutes / 60,
         spread: 1.0,
         tilt: 0.3,
-        points: _seriesAround(stats.sleepMinutes / 60, 1.0, 0.3),
-        axisLabels: weekLabels,
+        samples: stats.sleepSamples
+            .map((sample) => HealthChartPoint(sample.time, sample.value / 60))
+            .toList(),
       ),
       _HealthMetric(
         label: '步数',
@@ -4741,8 +4967,7 @@ class HealthDataDashboardPage extends StatelessWidget {
         baseValue: stats.steps / 1000,
         spread: 1.8,
         tilt: 0.8,
-        points: _seriesAround(stats.steps / 1000, 1.8, 0.8),
-        axisLabels: weekLabels,
+        samples: stats.stepSamples,
       ),
     ];
 
@@ -4755,24 +4980,9 @@ class HealthDataDashboardPage extends StatelessWidget {
         elevation: 0,
         actions: [
           IconButton(
-            tooltip: '用户主页',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (context) =>
-                      UserHomePage(currentEstimate: currentEstimate),
-                ),
-              );
-            },
-            icon: const CircleAvatar(
-              radius: 14,
-              backgroundColor: Color(0xFFDDF2E0),
-              child: Icon(
-                Icons.person_rounded,
-                size: 18,
-                color: Color(0xFF5C9B72),
-              ),
-            ),
+            tooltip: '手动记录',
+            onPressed: _openManualEntry,
+            icon: const Icon(Icons.edit_note_rounded),
           ),
           const SizedBox(width: 8),
         ],
@@ -4826,7 +5036,9 @@ class HealthDataDashboardPage extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          currentEstimate == null ? '测试数据预览' : estimate.summary,
+                          _currentEstimate == null && _testHealthDataEnabled
+                              ? '测试数据预览'
+                              : estimate.summary,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -4840,10 +5052,12 @@ class HealthDataDashboardPage extends StatelessWidget {
                 ],
               ),
             ),
-            if (currentEstimate == null) ...[
+            if (_currentEstimate == null) ...[
               const SizedBox(height: 10),
-              const Text(
-                '首页同步 HealthKit 或选择测试数据后，这里会显示当前那组数据。',
+              Text(
+                _testHealthDataEnabled
+                    ? '首页同步 HealthKit 或选择测试数据后，这里会显示当前那组数据。'
+                    : '测试数据已关闭。同步 HealthKit 或点击右上角手动记录后，这里会显示真实数据。',
                 style: TextStyle(
                   color: Color(0xFF60736C),
                   fontWeight: FontWeight.w700,
@@ -4861,42 +5075,110 @@ class HealthDataDashboardPage extends StatelessWidget {
     );
   }
 
-  static List<double> _seriesAround(double center, double spread, double tilt) {
-    final factors = [-0.8, -0.2, 0.4, -0.4, 0.9, 0.2, 1.0];
-    return [
-      for (var i = 0; i < factors.length; i++)
-        (center + factors[i] * spread + (i - 3) * tilt / 6).clamp(0, 99999),
-    ];
+}
+
+class _ManualHealthEntryPage extends StatefulWidget {
+  const _ManualHealthEntryPage();
+
+  @override
+  State<_ManualHealthEntryPage> createState() => _ManualHealthEntryPageState();
+}
+
+class _ManualHealthEntryPageState extends State<_ManualHealthEntryPage> {
+  final _heartRateController = TextEditingController();
+  final _hrvController = TextEditingController();
+
+  @override
+  void dispose() {
+    _heartRateController.dispose();
+    _hrvController.dispose();
+    super.dispose();
   }
 
-  static _HealthMetric _stressMetricForValue(double stressValue) {
-    final profile = StressProfile.fromValue(stressValue);
-    return _HealthMetric(
-      label: '压力值',
-      value: '${stressValue.round()}',
-      unit: '%',
-      color: profile.accentColor,
-      defaultRange: _HealthMetricRange.day,
-      baseValue: stressValue,
-      spread: 7,
-      tilt: 3,
-      points: _seriesAround(stressValue, 7, 3),
-      axisLabels: _dayTimeLabels(),
+  void _submit() {
+    final heartRate = double.tryParse(_heartRateController.text.trim());
+    final hrv = double.tryParse(_hrvController.text.trim());
+    if (heartRate == null && hrv == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请至少填写最近心率或当前 HRV。')));
+      return;
+    }
+
+    Navigator.of(context).pop(
+      ManualHealthEntry(
+        createdAt: DateTime.now(),
+        heartRate: heartRate,
+        hrv: hrv,
+      ),
     );
   }
 
-  static List<String> _dayTimeLabels() {
-    return const ['0点', '4点', '8点', '12点', '16点', '20点', '24点'];
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FFF4),
+      appBar: AppBar(
+        title: const Text('手动记录'),
+        backgroundColor: const Color(0xFFF8FFF4),
+        foregroundColor: const Color(0xFF24302A),
+        elevation: 0,
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+          children: [
+            const Text(
+              '手动补充的数据会保存在本机，并用于健康详情里的心率、HRV 图表和压力估算。',
+              style: TextStyle(
+                color: Color(0xFF60736C),
+                height: 1.4,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _heartRateController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: '最近的心率 HR',
+                suffixText: '次/分',
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _hrvController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: '当前 HRV',
+                suffixText: 'ms',
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              onPressed: _submit,
+              icon: const Icon(Icons.check_rounded),
+              label: const Text('保存记录'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1C8E96),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
-
-  static List<String> _weekDateLabels(DateTime now) {
-    return [
-      for (var i = 6; i >= 0; i--)
-        _formatMonthDay(now.subtract(Duration(days: i))),
-    ];
-  }
-
-  static String _formatMonthDay(DateTime date) => '${date.month}/${date.day}';
 }
 
 class _HealthMetric {
@@ -4909,8 +5191,7 @@ class _HealthMetric {
     required this.baseValue,
     required this.spread,
     required this.tilt,
-    required this.points,
-    required this.axisLabels,
+    required this.samples,
   });
 
   final String label;
@@ -4921,10 +5202,9 @@ class _HealthMetric {
   final double baseValue;
   final double spread;
   final double tilt;
-  final List<double> points;
-  final List<String> axisLabels;
+  final List<HealthChartPoint> samples;
 
-  _HealthMetric copyWith({List<double>? points, List<String>? axisLabels}) {
+  _HealthMetric copyWith({List<HealthChartPoint>? samples}) {
     return _HealthMetric(
       label: label,
       value: value,
@@ -4934,10 +5214,16 @@ class _HealthMetric {
       baseValue: baseValue,
       spread: spread,
       tilt: tilt,
-      points: points ?? this.points,
-      axisLabels: axisLabels ?? this.axisLabels,
+      samples: samples ?? this.samples,
     );
   }
+}
+
+class HealthChartPoint {
+  const HealthChartPoint(this.time, this.value);
+
+  final DateTime time;
+  final double value;
 }
 
 enum _HealthMetricRange { day, week, month }
@@ -4951,6 +5237,14 @@ class _HealthMetricCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final chartMetric = metric.copyWith(
+      samples: _HealthMetricDetailPageState.chartSamplesFor(
+        metric,
+        metric.defaultRange,
+        _HealthMetricPrecision.standard,
+        preview: true,
+      ),
+    );
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(8),
@@ -5015,9 +5309,14 @@ class _HealthMetricCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              Expanded(child: _HealthTrendChart(metric: metric)),
+              Expanded(child: _HealthTrendChart(metric: chartMetric)),
               const SizedBox(height: 8),
-              _HealthChartAxis(labels: metric.axisLabels),
+              _HealthChartAxis(
+                labels: _HealthMetricDetailPageState.axisLabelsFor(
+                  chartMetric.samples,
+                  metric.defaultRange,
+                ),
+              ),
             ],
           ),
         ),
@@ -5056,9 +5355,10 @@ class _HealthChartAxis extends StatelessWidget {
 }
 
 class _ScrollableHealthTrendChart extends StatelessWidget {
-  const _ScrollableHealthTrendChart({required this.metric});
+  const _ScrollableHealthTrendChart({required this.metric, this.range});
 
   final _HealthMetric metric;
+  final _HealthMetricRange? range;
 
   @override
   Widget build(BuildContext context) {
@@ -5066,7 +5366,7 @@ class _ScrollableHealthTrendChart extends StatelessWidget {
       builder: (context, constraints) {
         final contentWidth = _contentWidth(
           constraints.maxWidth,
-          metric.points.length,
+          metric.samples.length,
         );
 
         return Scrollbar(
@@ -5078,7 +5378,12 @@ class _ScrollableHealthTrendChart extends StatelessWidget {
                 children: [
                   Expanded(child: _HealthTrendChart(metric: metric)),
                   const SizedBox(height: 10),
-                  _HealthChartAxis(labels: metric.axisLabels),
+                  _HealthChartAxis(
+                    labels: _HealthMetricDetailPageState.axisLabelsFor(
+                      metric.samples,
+                      range ?? metric.defaultRange,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -5118,11 +5423,8 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    final points = _metricPoints(widget.metric, _range, _precision);
-    final labels = _axisLabels(_range, _precision, DateTime.now());
     final chartMetric = widget.metric.copyWith(
-      points: points,
-      axisLabels: labels,
+      samples: chartSamplesFor(widget.metric, _range, _precision),
     );
 
     return Scaffold(
@@ -5207,7 +5509,10 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
                   ),
                   const SizedBox(height: 12),
                   Expanded(
-                    child: _ScrollableHealthTrendChart(metric: chartMetric),
+                    child: _ScrollableHealthTrendChart(
+                      metric: chartMetric,
+                      range: _range,
+                    ),
                   ),
                 ],
               ),
@@ -5218,57 +5523,63 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
     );
   }
 
-  static List<double> _metricPoints(
+  static List<HealthChartPoint> chartSamplesFor(
     _HealthMetric metric,
     _HealthMetricRange range,
-    _HealthMetricPrecision precision,
+    _HealthMetricPrecision precision, {
+    bool preview = false,
+  }) {
+    final now = DateTime.now();
+    final start = switch (range) {
+      _HealthMetricRange.day => DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ),
+      _HealthMetricRange.week => now.subtract(const Duration(days: 7)),
+      _HealthMetricRange.month => now.subtract(const Duration(days: 30)),
+    };
+    final filtered = [
+      for (final sample in metric.samples)
+        if (!sample.time.isBefore(start) && !sample.time.isAfter(now)) sample,
+    ]..sort((a, b) => a.time.compareTo(b.time));
+
+    final targetCount = preview ? 8 : _pointCount(range, precision);
+    if (precision == _HealthMetricPrecision.detailed ||
+        filtered.length <= targetCount) {
+      return filtered;
+    }
+    return _evenlySample(filtered, targetCount);
+  }
+
+  static List<String> axisLabelsFor(
+    List<HealthChartPoint> samples,
+    _HealthMetricRange range,
   ) {
-    final count = _pointCount(range, precision);
-    final rangeScale = switch (range) {
-      _HealthMetricRange.day => 1.0,
-      _HealthMetricRange.week => 1.25,
-      _HealthMetricRange.month => 1.5,
-    };
-    final precisionScale = switch (precision) {
-      _HealthMetricPrecision.detailed => 0.85,
-      _HealthMetricPrecision.standard => 1.0,
-      _HealthMetricPrecision.overview => 1.15,
-    };
+    if (samples.isEmpty) {
+      return const [];
+    }
+    final labelCount = samples.length < 7 ? samples.length : 7;
+    final visible = _evenlySample(samples, labelCount);
     return [
-      for (var i = 0; i < count; i++)
-        (metric.baseValue +
-                (((i * 7) % 11) - 5) * metric.spread * 0.14 * rangeScale +
-                (i - (count - 1) / 2) * metric.tilt / count * precisionScale)
-            .clamp(0, 99999)
-            .toDouble(),
+      for (final sample in visible)
+        range == _HealthMetricRange.day
+            ? '${sample.time.hour}点'
+            : HealthDataDashboardPage._formatMonthDay(sample.time),
     ];
   }
 
-  static List<String> _axisLabels(
-    _HealthMetricRange range,
-    _HealthMetricPrecision precision,
-    DateTime now,
-  ) {
-    final count = _pointCount(range, precision);
-    switch (range) {
-      case _HealthMetricRange.day:
-        final interval = 24 / (count - 1);
-        return [for (var i = 0; i < count; i++) '${(i * interval).round()}点'];
-      case _HealthMetricRange.week:
-        return [
-          for (var i = count - 1; i >= 0; i--)
-            HealthDataDashboardPage._formatMonthDay(
-              now.subtract(Duration(days: i)),
-            ),
-        ];
-      case _HealthMetricRange.month:
-        return [
-          for (var i = count - 1; i >= 0; i--)
-            HealthDataDashboardPage._formatMonthDay(
-              now.subtract(Duration(days: i * 30 ~/ (count - 1))),
-            ),
-        ];
+  static List<T> _evenlySample<T>(List<T> values, int targetCount) {
+    if (targetCount <= 0 || values.isEmpty) {
+      return const [];
     }
+    if (values.length <= targetCount) {
+      return values;
+    }
+    return [
+      for (var i = 0; i < targetCount; i++)
+        values[(i * (values.length - 1) / (targetCount - 1)).round()],
+    ];
   }
 
   static int _pointCount(
@@ -5391,32 +5702,173 @@ class _HealthSegmentPanel extends StatelessWidget {
   }
 }
 
-class _HealthTrendChart extends StatelessWidget {
+class _HealthTrendChart extends StatefulWidget {
   const _HealthTrendChart({required this.metric});
 
   final _HealthMetric metric;
 
   @override
+  State<_HealthTrendChart> createState() => _HealthTrendChartState();
+}
+
+class _HealthTrendChartState extends State<_HealthTrendChart> {
+  int? _selectedIndex;
+
+  @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _HealthTrendChartPainter(
-        points: metric.points,
-        color: metric.color,
-      ),
-      child: const SizedBox.expand(),
+    final samples = widget.metric.samples;
+    if (samples.isEmpty) {
+      return const Center(
+        child: Text(
+          '暂无真实数据',
+          style: TextStyle(
+            color: Color(0xFF9AA8A2),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = Size(constraints.maxWidth, constraints.maxHeight);
+        final selectedIndex = _selectedIndex != null &&
+                _selectedIndex! < samples.length
+            ? _selectedIndex!
+            : null;
+        final selectedOffset = selectedIndex == null
+            ? null
+            : _HealthTrendChartPainter.offsetsFor(samples, size)[selectedIndex];
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (details) {
+            final offsets = _HealthTrendChartPainter.offsetsFor(samples, size);
+            if (offsets.isEmpty) {
+              return;
+            }
+            var nearestIndex = 0;
+            var nearestDistance = double.infinity;
+            for (var i = 0; i < offsets.length; i++) {
+              final distance = (offsets[i] - details.localPosition).distance;
+              if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestIndex = i;
+              }
+            }
+            setState(() => _selectedIndex = nearestIndex);
+          },
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              CustomPaint(
+                painter: _HealthTrendChartPainter(
+                  samples: samples,
+                  color: widget.metric.color,
+                  selectedIndex: selectedIndex,
+                ),
+                child: const SizedBox.expand(),
+              ),
+              if (selectedIndex != null && selectedOffset != null)
+                Positioned(
+                  left: (selectedOffset.dx - 62).clamp(
+                    0,
+                    (constraints.maxWidth - 124).clamp(0, constraints.maxWidth),
+                  ),
+                  top: (selectedOffset.dy - 64).clamp(
+                    0,
+                    (constraints.maxHeight - 58).clamp(
+                      0,
+                      constraints.maxHeight,
+                    ),
+                  ),
+                  child: _HealthPointTooltip(
+                    metric: widget.metric,
+                    sample: samples[selectedIndex],
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
 
-class _HealthTrendChartPainter extends CustomPainter {
-  const _HealthTrendChartPainter({required this.points, required this.color});
+class _HealthPointTooltip extends StatelessWidget {
+  const _HealthPointTooltip({required this.metric, required this.sample});
 
-  final List<double> points;
+  final _HealthMetric metric;
+  final HealthChartPoint sample;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 124,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEFF1F4),
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${sample.value.round()} ${metric.unit}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: metric.color,
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              _formatTooltipTime(sample.time),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF7B8288),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _formatTooltipTime(DateTime time) {
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '${time.month}月${time.day}日 $hour:$minute';
+  }
+}
+
+class _HealthTrendChartPainter extends CustomPainter {
+  const _HealthTrendChartPainter({
+    required this.samples,
+    required this.color,
+    required this.selectedIndex,
+  });
+
+  final List<HealthChartPoint> samples;
   final Color color;
+  final int? selectedIndex;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (points.isEmpty || size.width <= 0 || size.height <= 0) {
+    if (samples.isEmpty || size.width <= 0 || size.height <= 0) {
       return;
     }
 
@@ -5428,21 +5880,12 @@ class _HealthTrendChartPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    final minValue = points.reduce((a, b) => a < b ? a : b);
-    final maxValue = points.reduce((a, b) => a > b ? a : b);
-    final range = (maxValue - minValue).abs() < 0.01
-        ? 1.0
-        : maxValue - minValue;
-    final dx = points.length == 1 ? 0.0 : size.width / (points.length - 1);
-    Offset pointFor(int index) {
-      final normalized = (points[index] - minValue) / range;
-      return Offset(index * dx, size.height - normalized * size.height);
-    }
+    final offsets = offsetsFor(samples, size);
 
     final fillPath = Path()..moveTo(0, size.height);
     final linePath = Path();
-    for (var i = 0; i < points.length; i++) {
-      final point = pointFor(i);
+    for (var i = 0; i < offsets.length; i++) {
+      final point = offsets[i];
       if (i == 0) {
         linePath.moveTo(point.dx, point.dy);
         fillPath.lineTo(point.dx, point.dy);
@@ -5471,14 +5914,58 @@ class _HealthTrendChartPainter extends CustomPainter {
     canvas.drawPath(linePath, linePaint);
 
     final dotPaint = Paint()..color = color;
-    for (var i = 0; i < points.length; i++) {
-      canvas.drawCircle(pointFor(i), 3.5, dotPaint);
+    for (var i = 0; i < samples.length; i++) {
+      canvas.drawCircle(offsets[i], 3.5, dotPaint);
     }
+
+    if (selectedIndex != null && selectedIndex! < offsets.length) {
+      final point = offsets[selectedIndex!];
+      final selectedLinePaint = Paint()
+        ..color = const Color(0xFFC9CED3)
+        ..strokeWidth = 2;
+      canvas.drawLine(
+        Offset(point.dx, 0),
+        Offset(point.dx, size.height),
+        selectedLinePaint,
+      );
+      canvas.drawCircle(
+        point,
+        6,
+        Paint()..color = Colors.white,
+      );
+      canvas.drawCircle(
+        point,
+        4,
+        dotPaint,
+      );
+    }
+  }
+
+  static List<Offset> offsetsFor(List<HealthChartPoint> samples, Size size) {
+    if (samples.isEmpty || size.width <= 0 || size.height <= 0) {
+      return const [];
+    }
+    final values = [for (final sample in samples) sample.value];
+    final minValue = values.reduce((a, b) => a < b ? a : b);
+    final maxValue = values.reduce((a, b) => a > b ? a : b);
+    final range = (maxValue - minValue).abs() < 0.01
+        ? 1.0
+        : maxValue - minValue;
+    final dx = samples.length == 1 ? 0.0 : size.width / (samples.length - 1);
+    return [
+      for (var i = 0; i < samples.length; i++)
+        Offset(
+          i * dx,
+          size.height - ((samples[i].value - minValue) / range) * size.height,
+        ),
+    ];
   }
 
   @override
   bool shouldRepaint(covariant _HealthTrendChartPainter oldDelegate) {
-    return oldDelegate.points != points || oldDelegate.color != color;
+    return oldDelegate.samples != samples ||
+        oldDelegate.color != color ||
+        oldDelegate.selectedIndex != selectedIndex;
   }
 }
 
@@ -7891,6 +8378,7 @@ class _HealthSyncButton extends StatelessWidget {
     required this.isSyncing,
     required this.summary,
     required this.accentColor,
+    required this.testDataEnabled,
     required this.onPressed,
     required this.onSamplePressed,
   });
@@ -7898,6 +8386,7 @@ class _HealthSyncButton extends StatelessWidget {
   final bool isSyncing;
   final String? summary;
   final Color accentColor;
+  final bool testDataEnabled;
   final VoidCallback onPressed;
   final VoidCallback onSamplePressed;
 
@@ -7928,19 +8417,21 @@ class _HealthSyncButton extends StatelessWidget {
             shape: const StadiumBorder(),
           ),
         ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: isSyncing ? null : onSamplePressed,
-          icon: const Icon(Icons.science_rounded, size: 18),
-          label: const Text('使用测试数据'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFFFFD447),
-            side: const BorderSide(color: Color(0xFF151515)),
-            backgroundColor: const Color(0xFF151515),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            shape: const StadiumBorder(),
+        if (testDataEnabled) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: isSyncing ? null : onSamplePressed,
+            icon: const Icon(Icons.science_rounded, size: 18),
+            label: const Text('使用测试数据'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFFFD447),
+              side: const BorderSide(color: Color(0xFF151515)),
+              backgroundColor: const Color(0xFF151515),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: const StadiumBorder(),
+            ),
           ),
-        ),
+        ],
         if (summary != null && summary!.isNotEmpty) ...[
           const SizedBox(height: 6),
           Text(
@@ -8699,21 +9190,37 @@ class HealthStressEstimator {
     );
 
     final stats = HealthStressStats.fromData(data);
+    final manualEntries = await ManualHealthEntryStore.load();
+    final recentManualEntries = manualEntries
+        .where((entry) => entry.createdAt.isAfter(start))
+        .toList();
     final baselineStats = HealthStressStats.fromData(baselineData);
+    final mergedStats = stats.mergeManualEntries(recentManualEntries);
     if (!stats.hasAnySignal) {
-      throw const HealthStressPermissionException(
-        '近 24 小时没有可用的心率、HRV、睡眠或步数数据。',
-      );
+      if (recentManualEntries.isEmpty) {
+        throw const HealthStressPermissionException(
+          '近 24 小时没有可用的心率、HRV、睡眠或步数数据。',
+        );
+      }
     }
-    final result = stats.calculateStress(
-      hrvBaseline: baselineStats.averageHrv,
+    final heartRateBaseline =
+        baselineStats.averageRestingHeartRate ?? baselineStats.averageHeartRate;
+    final hrvBaseline = baselineStats.averageHrv;
+    final result = mergedStats.calculateStress(
+      heartRateBaseline: heartRateBaseline,
+      hrvBaseline: hrvBaseline,
+      lastStress: lastStress,
+    );
+    final chartStats = mergedStats.withStressSamples(
+      heartRateBaseline: heartRateBaseline,
+      hrvBaseline: hrvBaseline,
       lastStress: lastStress,
     );
 
     return HealthStressEstimate(
       stressValue: result.stressValue,
       summary: result.summary,
-      stats: stats,
+      stats: chartStats,
     );
   }
 
@@ -8729,6 +9236,7 @@ class HealthStressEstimator {
       sleepMinutes: sample.sleepMinutes,
     );
     final result = stats.calculateStress(
+      heartRateBaseline: sample.averageRestingHeartRate,
       hrvBaseline: sample.hrvBaseline,
       lastStress: lastStress,
     );
@@ -8774,6 +9282,14 @@ class HealthStressEstimate {
   final double stressValue;
   final String summary;
   final HealthStressStats stats;
+
+  HealthStressEstimate copyWith({HealthStressStats? stats, double? stressValue}) {
+    return HealthStressEstimate(
+      stressValue: stressValue ?? this.stressValue,
+      summary: summary,
+      stats: stats ?? this.stats,
+    );
+  }
 }
 
 class HealthStressPermissionException implements Exception {
@@ -8789,12 +9305,21 @@ class HealthStressStats {
     required this.averageHrv,
     required this.steps,
     required this.sleepMinutes,
+    this.heartRateSamples = const [],
+    this.hrvSamples = const [],
+    this.sleepSamples = const [],
+    this.stepSamples = const [],
+    this.stressSamples = const [],
   });
 
   factory HealthStressStats.fromData(List<HealthDataPoint> points) {
     final heartRates = <double>[];
     final restingHeartRates = <double>[];
     final hrvValues = <double>[];
+    final heartRateEntries = <HealthChartPoint>[];
+    final hrvEntries = <HealthChartPoint>[];
+    final sleepEntries = <HealthChartPoint>[];
+    final stepEntries = <HealthChartPoint>[];
     double steps = 0;
     double sleepMinutes = 0;
 
@@ -8807,17 +9332,21 @@ class HealthStressStats {
       switch (point.type) {
         case HealthDataType.HEART_RATE:
           heartRates.add(value);
+          heartRateEntries.add(HealthChartPoint(point.dateFrom, value));
         case HealthDataType.RESTING_HEART_RATE:
           restingHeartRates.add(value);
         case HealthDataType.HEART_RATE_VARIABILITY_SDNN:
           hrvValues.add(value);
+          hrvEntries.add(HealthChartPoint(point.dateFrom, value));
         case HealthDataType.STEPS:
           steps += value;
+          stepEntries.add(HealthChartPoint(point.dateFrom, value));
         case HealthDataType.SLEEP_ASLEEP:
         case HealthDataType.SLEEP_DEEP:
         case HealthDataType.SLEEP_LIGHT:
         case HealthDataType.SLEEP_REM:
           sleepMinutes += value;
+          sleepEntries.add(HealthChartPoint(point.dateFrom, value));
         default:
           break;
       }
@@ -8829,6 +9358,10 @@ class HealthStressStats {
       averageHrv: _average(hrvValues),
       steps: steps,
       sleepMinutes: sleepMinutes.clamp(0, 10 * 60).toDouble(),
+      heartRateSamples: _visibleTimedValues(heartRateEntries),
+      hrvSamples: _visibleTimedValues(hrvEntries),
+      sleepSamples: _visibleTimedValues(sleepEntries),
+      stepSamples: _visibleTimedValues(stepEntries),
     );
   }
 
@@ -8837,6 +9370,11 @@ class HealthStressStats {
   final double? averageHrv;
   final double steps;
   final double sleepMinutes;
+  final List<HealthChartPoint> heartRateSamples;
+  final List<HealthChartPoint> hrvSamples;
+  final List<HealthChartPoint> sleepSamples;
+  final List<HealthChartPoint> stepSamples;
+  final List<HealthChartPoint> stressSamples;
 
   bool get hasAnySignal {
     return averageHeartRate != null ||
@@ -8847,38 +9385,49 @@ class HealthStressStats {
   }
 
   HealthStressCalculation calculateStress({
+    required double? heartRateBaseline,
     required double? hrvBaseline,
     required double lastStress,
   }) {
     final heartRate = averageHeartRate;
     final hrv = averageHrv;
-    final heartRateBaseline = averageRestingHeartRate;
+    final resolvedHeartRateBaseline =
+        averageRestingHeartRate ?? heartRateBaseline;
     final safeLastStress = lastStress.clamp(0, 100).toDouble();
 
-    if (heartRate == null ||
-        hrv == null ||
-        heartRateBaseline == null ||
-        hrvBaseline == null ||
-        heartRateBaseline <= 0 ||
-        hrvBaseline <= 0) {
+    final missing = <String>[
+      if (heartRate == null) '最近心率 HR',
+      if (hrv == null) '当前 HRV',
+      if (resolvedHeartRateBaseline == null || resolvedHeartRateBaseline <= 0)
+        '心率基线 HR_baseline',
+      if (hrvBaseline == null || hrvBaseline <= 0) 'HRV 基线 HRV_baseline',
+    ];
+    if (missing.isNotEmpty) {
       return HealthStressCalculation(
         stressValue: safeLastStress.roundToDouble(),
-        summary: '数据不足',
+        summary: '数据不足：缺少${missing.join('、')}。',
       );
     }
 
-    if (heartRate > heartRateBaseline * 1.45) {
+    final currentHeartRate = heartRate!;
+    final currentHrv = hrv!;
+    final currentHeartRateBaseline = resolvedHeartRateBaseline!;
+    final currentHrvBaseline = hrvBaseline!;
+
+    if (currentHeartRate > currentHeartRateBaseline * 1.45) {
       return HealthStressCalculation(
         stressValue: safeLastStress.roundToDouble(),
         summary: '活动中，暂停压力判断',
       );
     }
 
-    final heartRateDelta = (heartRate - heartRateBaseline) / heartRateBaseline;
+    final heartRateDelta =
+        (currentHeartRate - currentHeartRateBaseline) /
+        currentHeartRateBaseline;
     final heartRateScore = (heartRateDelta / 0.30 * 100)
         .clamp(0, 100)
         .toDouble();
-    final hrvDelta = (hrvBaseline - hrv) / hrvBaseline;
+    final hrvDelta = (currentHrvBaseline - currentHrv) / currentHrvBaseline;
     final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
     final rawStress = hrvScore * 0.65 + heartRateScore * 0.35;
     final stress = (safeLastStress * 0.7 + rawStress * 0.3).clamp(0, 100);
@@ -8914,6 +9463,132 @@ class HealthStressStats {
     }
     return values.reduce((a, b) => a + b) / values.length;
   }
+
+  HealthStressStats mergeManualEntries(List<ManualHealthEntry> entries) {
+    if (entries.isEmpty) {
+      return this;
+    }
+    final sorted = [...entries]
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    final manualHeartRates = [
+      for (final entry in sorted)
+        if (entry.heartRate != null) entry.heartRate!,
+    ];
+    final manualHrvs = [
+      for (final entry in sorted)
+        if (entry.hrv != null) entry.hrv!,
+    ];
+    final manualHeartRateTimed = [
+      for (final entry in sorted)
+        if (entry.heartRate != null)
+          HealthChartPoint(entry.createdAt, entry.heartRate!),
+    ];
+    final manualHrvTimed = [
+      for (final entry in sorted)
+        if (entry.hrv != null) HealthChartPoint(entry.createdAt, entry.hrv!),
+    ];
+
+    final heartRateValues = [?averageHeartRate, ...manualHeartRates];
+    final hrvValues = [?averageHrv, ...manualHrvs];
+
+    return HealthStressStats(
+      averageHeartRate: _average(heartRateValues),
+      averageRestingHeartRate: averageRestingHeartRate,
+      averageHrv: _average(hrvValues),
+      steps: steps,
+      sleepMinutes: sleepMinutes,
+      heartRateSamples: _visibleTimedValues([
+        ...heartRateSamples,
+        ...manualHeartRateTimed,
+      ]),
+      hrvSamples: _visibleTimedValues([...hrvSamples, ...manualHrvTimed]),
+      sleepSamples: sleepSamples,
+      stepSamples: stepSamples,
+      stressSamples: stressSamples,
+    );
+  }
+
+  HealthStressStats withStressSamples({
+    required double? heartRateBaseline,
+    required double? hrvBaseline,
+    required double lastStress,
+  }) {
+    final resolvedHeartRateBaseline =
+        averageRestingHeartRate ?? heartRateBaseline;
+    if (resolvedHeartRateBaseline == null ||
+        resolvedHeartRateBaseline <= 0 ||
+        hrvBaseline == null ||
+        hrvBaseline <= 0 ||
+        heartRateSamples.isEmpty ||
+        hrvSamples.isEmpty) {
+      return this;
+    }
+
+    final pairedSamples = <HealthChartPoint>[];
+    var smoothedStress = lastStress.clamp(0, 100).toDouble();
+    for (final heartRate in heartRateSamples) {
+      final hrv = _nearestSample(hrvSamples, heartRate.time);
+      if (hrv == null) {
+        continue;
+      }
+      if (heartRate.value > resolvedHeartRateBaseline * 1.45) {
+        pairedSamples.add(HealthChartPoint(heartRate.time, smoothedStress));
+        continue;
+      }
+      final heartRateDelta =
+          (heartRate.value - resolvedHeartRateBaseline) /
+          resolvedHeartRateBaseline;
+      final heartRateScore = (heartRateDelta / 0.30 * 100)
+          .clamp(0, 100)
+          .toDouble();
+      final hrvDelta = (hrvBaseline - hrv.value) / hrvBaseline;
+      final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
+      final rawStress = hrvScore * 0.65 + heartRateScore * 0.35;
+      smoothedStress = (smoothedStress * 0.7 + rawStress * 0.3)
+          .clamp(0, 100)
+          .toDouble();
+      pairedSamples.add(HealthChartPoint(heartRate.time, smoothedStress));
+    }
+
+    return HealthStressStats(
+      averageHeartRate: averageHeartRate,
+      averageRestingHeartRate: averageRestingHeartRate,
+      averageHrv: averageHrv,
+      steps: steps,
+      sleepMinutes: sleepMinutes,
+      heartRateSamples: heartRateSamples,
+      hrvSamples: hrvSamples,
+      sleepSamples: sleepSamples,
+      stepSamples: stepSamples,
+      stressSamples: _visibleTimedValues(pairedSamples),
+    );
+  }
+
+  static HealthChartPoint? _nearestSample(
+    List<HealthChartPoint> samples,
+    DateTime time,
+  ) {
+    HealthChartPoint? nearest;
+    var nearestDiff = const Duration(hours: 9999);
+    for (final sample in samples) {
+      final diff = sample.time.difference(time).abs();
+      if (diff < nearestDiff) {
+        nearest = sample;
+        nearestDiff = diff;
+      }
+    }
+    return nearestDiff <= const Duration(hours: 3) ? nearest : null;
+  }
+
+  static List<HealthChartPoint> _visibleTimedValues(
+    List<HealthChartPoint> values,
+  ) {
+    final sorted = [...values]..sort((a, b) => a.time.compareTo(b.time));
+    final visible = sorted.length > 24
+        ? sorted.sublist(sorted.length - 24)
+        : sorted;
+    return visible;
+  }
 }
 
 class HealthStressCalculation {
@@ -8924,4 +9599,78 @@ class HealthStressCalculation {
 
   final double stressValue;
   final String summary;
+}
+
+class ManualHealthEntry {
+  const ManualHealthEntry({
+    required this.createdAt,
+    required this.heartRate,
+    required this.hrv,
+  });
+
+  final DateTime createdAt;
+  final double? heartRate;
+  final double? hrv;
+
+  Map<String, Object?> toJson() {
+    return {
+      'createdAt': createdAt.toIso8601String(),
+      'heartRate': heartRate,
+      'hrv': hrv,
+    };
+  }
+
+  factory ManualHealthEntry.fromJson(Map<String, Object?> json) {
+    return ManualHealthEntry(
+      createdAt:
+          DateTime.tryParse(json['createdAt']?.toString() ?? '') ??
+          DateTime.now(),
+      heartRate: _jsonDouble(json['heartRate']),
+      hrv: _jsonDouble(json['hrv']),
+    );
+  }
+
+  static double? _jsonDouble(Object? value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+    return double.tryParse(value?.toString() ?? '');
+  }
+}
+
+class ManualHealthEntryStore {
+  const ManualHealthEntryStore._();
+
+  static Future<List<ManualHealthEntry>> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_manualHealthEntriesKey);
+    if (raw == null || raw.isEmpty) {
+      return const [];
+    }
+
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return const [];
+      }
+      final entries = [
+        for (final item in decoded)
+          if (item is Map<String, Object?>) ManualHealthEntry.fromJson(item),
+      ];
+      entries.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return entries;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Future<void> add(ManualHealthEntry entry) async {
+    final entries = await load();
+    final nextEntries = [entry, ...entries].take(100).toList();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _manualHealthEntriesKey,
+      jsonEncode(nextEntries.map((entry) => entry.toJson()).toList()),
+    );
+  }
 }
