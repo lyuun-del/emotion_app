@@ -5,19 +5,26 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:health/health.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
 
 const _lighthouseAvatarAsset = 'assets/images/lighthouse_lamp_avatar.png';
 const _lighthouseAvatarPathKey = 'lighthouse_assistant_avatar_path';
 const _userAvatarPathKey = 'user_avatar_path';
 const _userDisplayNameKey = 'user_display_name';
 const _userBioKey = 'user_bio';
+const _userBirthdayKey = 'user_birthday';
 const _testHealthDataEnabledKey = 'test_health_data_enabled';
 const _useHrvForStressKey = 'use_hrv_for_stress';
 const _manualHealthEntriesKey = 'manual_health_entries';
+const _flowerReminderStorageKey = 'flower_reminders';
+const _flowerQuietStartMinutesKey = 'flower_quiet_start_minutes';
+const _flowerQuietEndMinutesKey = 'flower_quiet_end_minutes';
 const _appIconChannel = MethodChannel('moodland/app_icon');
 const _homeDeepSeekApiKey = String.fromEnvironment('AI_WORKER_TOKEN');
 
@@ -51,7 +58,9 @@ class AppIconSwitcher {
   }
 }
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await _FlowerNotificationService.initialize();
   runApp(const MoodStressApp());
 }
 
@@ -63,7 +72,7 @@ class MoodStressApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'moodland',
+      title: 'MoodLand',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -118,7 +127,7 @@ class _StressHomePageState extends State<StressHomePage>
   bool get _isShowingHomeGuide => _homeGuideStep != null;
   List<_HomeGuideStep> get _homeGuideSteps => [
     const _HomeGuideStep(
-      title: '欢迎来到 moodland',
+      title: '欢迎来到 MoodLand',
       message: '这里会把压力值、健康数据、情绪记录和灯塔对话放在同一座小岛上，帮你更快看见自己的状态。',
     ),
     _HomeGuideStep(
@@ -382,6 +391,11 @@ class _StressHomePageState extends State<StressHomePage>
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_newUserQuestionAnswersKey, jsonEncode(savedAnswers));
     await prefs.setBool(_newUserQuestionsCompletedKey, true);
+    final birthday = answers['birthday']?.toString().trim();
+    if (birthday != null && birthday.isNotEmpty) {
+      await prefs.setString(_userBirthdayKey, birthday);
+      await _FlowerNotificationService.scheduleBirthdayGreeting();
+    }
     final reply = await _appendOnboardingReplyToLighthouseChat(savedAnswers);
     if (!mounted || reply == null) {
       return;
@@ -1507,7 +1521,7 @@ class _HomeHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'moodland',
+                'MoodLand',
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                   fontFamily: 'Snell Roundhand',
                   fontSize: 36,
@@ -2325,14 +2339,295 @@ class FlowerReminderPage extends StatefulWidget {
   State<FlowerReminderPage> createState() => _FlowerReminderPageState();
 }
 
+class _FlowerNotificationService {
+  const _FlowerNotificationService._();
+
+  static final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
+  static bool _initialized = false;
+
+  static Future<void> initialize() async {
+    if (_initialized) {
+      return;
+    }
+    tz_data.initializeTimeZones();
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const darwin = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+    try {
+      await _plugin.initialize(
+        settings: const InitializationSettings(android: android, iOS: darwin),
+      );
+      _initialized = true;
+      await _rescheduleStoredReminders();
+      await scheduleBirthdayGreeting();
+    } on MissingPluginException {
+      _initialized = false;
+    } on PlatformException {
+      _initialized = false;
+    } catch (_) {
+      _initialized = false;
+    }
+  }
+
+  static Future<bool> requestPermission() async {
+    await initialize();
+    if (!_initialized) {
+      return false;
+    }
+    try {
+      final androidGranted = await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestNotificationsPermission();
+      final iosGranted = await _plugin
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
+      return androidGranted ?? iosGranted ?? true;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> scheduleReminder(_FlowerReminder reminder) async {
+    if (!await requestPermission()) {
+      return;
+    }
+    await cancelReminder(reminder.id);
+    final quiet = await quietWindow();
+    final dates = _nextReminderDates(reminder, quiet, limit: 30);
+    for (var i = 0; i < dates.length; i++) {
+      await _safeSchedule(
+        _notificationId('flower-${reminder.id}-$i'),
+        '花时来信',
+        reminder.message,
+        dates[i],
+      );
+    }
+  }
+
+  static Future<void> cancelReminder(String id) async {
+    if (!_initialized) {
+      await initialize();
+    }
+    if (!_initialized) {
+      return;
+    }
+    for (var i = 0; i < 32; i++) {
+      try {
+        await _plugin.cancel(id: _notificationId('flower-$id-$i'));
+      } on MissingPluginException {
+        return;
+      } on PlatformException {
+        return;
+      } catch (_) {
+        return;
+      }
+    }
+  }
+
+  static Future<void> scheduleBirthdayGreeting() async {
+    final prefs = await SharedPreferences.getInstance();
+    final birthday = _parseBirthday(
+      prefs.getString(_userBirthdayKey) ?? prefs.getString('birthday') ?? '',
+    );
+    if (birthday == null) {
+      return;
+    }
+    if (!await requestPermission()) {
+      return;
+    }
+    try {
+      await _plugin.cancel(id: _notificationId('birthday-greeting'));
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    } catch (_) {
+      return;
+    }
+    final now = DateTime.now();
+    var date = DateTime(now.year, birthday.$1, birthday.$2, 9);
+    if (!date.isAfter(now)) {
+      date = DateTime(now.year + 1, birthday.$1, birthday.$2, 9);
+    }
+    await _safeSchedule(
+      _notificationId('birthday-greeting'),
+      '花时来信',
+      '生日快乐。愿今天的花只为你慢慢开。',
+      date,
+    );
+  }
+
+  static Future<({int start, int end})> quietWindow() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (
+      start: prefs.getInt(_flowerQuietStartMinutesKey) ?? 23 * 60,
+      end: prefs.getInt(_flowerQuietEndMinutesKey) ?? 7 * 60,
+    );
+  }
+
+  static Future<void> setQuietWindow(TimeOfDay start, TimeOfDay end) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      _flowerQuietStartMinutesKey,
+      start.hour * 60 + start.minute,
+    );
+    await prefs.setInt(_flowerQuietEndMinutesKey, end.hour * 60 + end.minute);
+    await _rescheduleStoredReminders();
+  }
+
+  static Future<void> _rescheduleStoredReminders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_flowerReminderStorageKey);
+    if (raw == null || raw.isEmpty) {
+      return;
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      return;
+    }
+    for (final item in decoded) {
+      if (item is Map) {
+        await scheduleReminder(
+          _FlowerReminder.fromJson(Map<String, Object?>.from(item)),
+        );
+      }
+    }
+  }
+
+  static List<DateTime> _nextReminderDates(
+    _FlowerReminder reminder,
+    ({int start, int end}) quiet, {
+    required int limit,
+  }) {
+    final now = DateTime.now();
+    final dates = <DateTime>[];
+    for (
+      var dayOffset = 0;
+      dayOffset < 60 && dates.length < limit;
+      dayOffset++
+    ) {
+      final day = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).add(Duration(days: dayOffset));
+      final weekday = day.weekday;
+      final isActiveDay = switch (reminder.frequency) {
+        '每天' => true,
+        '工作日' => weekday <= 5,
+        '自定义' => reminder.weekdays.contains(weekday),
+        _ => true,
+      };
+      if (!isActiveDay) {
+        continue;
+      }
+      final date = DateTime(
+        day.year,
+        day.month,
+        day.day,
+        reminder.hour,
+        reminder.minute,
+      );
+      if (!date.isAfter(now) ||
+          _isQuietTime(reminder.hour * 60 + reminder.minute, quiet)) {
+        continue;
+      }
+      dates.add(date);
+    }
+    return dates;
+  }
+
+  static bool _isQuietTime(int minuteOfDay, ({int start, int end}) quiet) {
+    if (quiet.start == quiet.end) {
+      return false;
+    }
+    if (quiet.start < quiet.end) {
+      return minuteOfDay >= quiet.start && minuteOfDay < quiet.end;
+    }
+    return minuteOfDay >= quiet.start || minuteOfDay < quiet.end;
+  }
+
+  static Future<void> _safeSchedule(
+    int id,
+    String title,
+    String body,
+    DateTime date,
+  ) async {
+    try {
+      await _plugin.zonedSchedule(
+        id: id,
+        title: title,
+        body: body,
+        scheduledDate: tz.TZDateTime.from(date, tz.local),
+        notificationDetails: const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'flower_letters',
+            '花时来信',
+            channelDescription: '花时来信的系统提醒',
+            importance: Importance.defaultImportance,
+            priority: Priority.defaultPriority,
+          ),
+          iOS: DarwinNotificationDetails(),
+        ),
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      );
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    } catch (_) {
+      return;
+    }
+  }
+
+  static int _notificationId(String source) {
+    var hash = 0;
+    for (final unit in source.codeUnits) {
+      hash = (hash * 31 + unit) & 0x7fffffff;
+    }
+    return hash;
+  }
+
+  static (int, int)? _parseBirthday(String value) {
+    final numbers = RegExp(r'\d+')
+        .allMatches(value)
+        .map((match) => int.tryParse(match.group(0) ?? ''))
+        .whereType<int>()
+        .toList();
+    if (numbers.length < 2) {
+      return null;
+    }
+    final month = numbers.length >= 3
+        ? numbers[numbers.length - 2]
+        : numbers[0];
+    final day = numbers.length >= 3 ? numbers.last : numbers[1];
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+      return null;
+    }
+    return (month, day);
+  }
+}
+
 class _FlowerReminderPageState extends State<FlowerReminderPage> {
-  static const _storageKey = 'flower_reminders';
   static const _frequencies = ['每天', '工作日', '自定义'];
 
   final _customMessageController = TextEditingController();
   final _customWeekdays = <int>{1, 3, 5};
 
   String _frequency = _frequencies.first;
+  String _selectedCategory = _reminderCategories.first;
   String _selectedSubcategory = _reminderSubcategories.first;
   TimeOfDay _selectedTime = const TimeOfDay(hour: 9, minute: 0);
   _ReminderPhrase _selectedPhrase = _reminderPhrases.first;
@@ -2352,13 +2647,22 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
 
   List<_ReminderPhrase> get _filteredPhrases {
     return _reminderPhrases
+        .where((phrase) => phrase.category == _selectedCategory)
         .where((phrase) => phrase.subcategory == _selectedSubcategory)
+        .toList();
+  }
+
+  List<String> get _filteredSubcategories {
+    return _reminderPhrases
+        .where((phrase) => phrase.category == _selectedCategory)
+        .map((phrase) => phrase.subcategory)
+        .toSet()
         .toList();
   }
 
   Future<void> _loadReminders() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_storageKey);
+    final raw = prefs.getString(_flowerReminderStorageKey);
     if (raw == null || raw.isEmpty) {
       return;
     }
@@ -2382,7 +2686,7 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
   Future<void> _saveReminders() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-      _storageKey,
+      _flowerReminderStorageKey,
       jsonEncode(_reminders.map((reminder) => reminder.toJson()).toList()),
     );
   }
@@ -2421,6 +2725,7 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
       _customMessageController.clear();
     });
     await _saveReminders();
+    await _FlowerNotificationService.scheduleReminder(reminder);
 
     if (!mounted) {
       return;
@@ -2435,6 +2740,7 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
       _reminders = _reminders.where((reminder) => reminder.id != id).toList();
     });
     await _saveReminders();
+    await _FlowerNotificationService.cancelReminder(id);
   }
 
   @override
@@ -2464,11 +2770,33 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
               title: '提醒内容',
               child: Column(
                 children: [
-                  _ReminderEventPicker(
-                    selectedSubcategory: _selectedSubcategory,
+                  _ReminderDropdown<String>(
+                    label: '先选择提醒方向',
+                    value: _selectedCategory,
+                    values: _reminderCategories,
+                    labelFor: (value) => value,
+                    onChanged: (category) {
+                      final nextPhrase = _reminderPhrases.firstWhere(
+                        (phrase) => phrase.category == category,
+                      );
+                      setState(() {
+                        _selectedCategory = category;
+                        _selectedSubcategory = nextPhrase.subcategory;
+                        _selectedPhrase = nextPhrase;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  _ReminderDropdown<String>(
+                    label: '再选择具体提醒事项',
+                    value: _selectedSubcategory,
+                    values: _filteredSubcategories,
+                    labelFor: (value) => value,
                     onChanged: (subcategory) {
                       final nextPhrase = _reminderPhrases.firstWhere(
-                        (phrase) => phrase.subcategory == subcategory,
+                        (phrase) =>
+                            phrase.category == _selectedCategory &&
+                            phrase.subcategory == subcategory,
                       );
                       setState(() {
                         _selectedSubcategory = subcategory;
@@ -2712,22 +3040,28 @@ class _ReminderTextField extends StatelessWidget {
   }
 }
 
-class _ReminderEventPicker extends StatelessWidget {
-  const _ReminderEventPicker({
-    required this.selectedSubcategory,
+class _ReminderDropdown<T> extends StatelessWidget {
+  const _ReminderDropdown({
+    required this.label,
+    required this.value,
+    required this.values,
+    required this.labelFor,
     required this.onChanged,
   });
 
-  final String selectedSubcategory;
-  final ValueChanged<String> onChanged;
+  final String label;
+  final T value;
+  final List<T> values;
+  final String Function(T value) labelFor;
+  final ValueChanged<T> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return DropdownButtonFormField<String>(
-      initialValue: selectedSubcategory,
+    return DropdownButtonFormField<T>(
+      initialValue: value,
       isExpanded: true,
       decoration: InputDecoration(
-        labelText: '想让灯塔提醒你什么？',
+        labelText: label,
         filled: true,
         fillColor: const Color(0xFFF5FBF5),
         border: OutlineInputBorder(
@@ -2736,15 +3070,15 @@ class _ReminderEventPicker extends StatelessWidget {
         ),
       ),
       items: [
-        for (final subcategory in _reminderSubcategories)
+        for (final item in values)
           DropdownMenuItem(
-            value: subcategory,
-            child: Text(subcategory, overflow: TextOverflow.ellipsis),
+            value: item,
+            child: Text(labelFor(item), overflow: TextOverflow.ellipsis),
           ),
       ],
-      onChanged: (subcategory) {
-        if (subcategory != null) {
-          onChanged(subcategory);
+      onChanged: (value) {
+        if (value != null) {
+          onChanged(value);
         }
       },
     );
@@ -3338,6 +3672,11 @@ const _reminderSubcategories = [
   '平衡',
 ];
 
+final _reminderCategories = _reminderPhrases
+    .map((phrase) => phrase.category)
+    .toSet()
+    .toList();
+
 class _NewUserQuestionsPage extends StatefulWidget {
   const _NewUserQuestionsPage();
 
@@ -3460,7 +3799,7 @@ class _NewUserQuestionsPageState extends State<_NewUserQuestionsPage> {
             padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
             children: [
               Text(
-                '先让 moodland 认识一下你。',
+                '先让 MoodLand 认识一下你。',
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   color: const Color(0xFF587171),
                   fontWeight: FontWeight.w800,
@@ -3837,8 +4176,11 @@ class _UserHomePageState extends State<UserHomePage> {
   String? _userAvatarPath;
   String? _displayName;
   String? _bio;
+  String? _birthday;
   bool _testHealthDataEnabled = true;
   bool _useHrvForStress = true;
+  TimeOfDay _quietStartTime = const TimeOfDay(hour: 23, minute: 0);
+  TimeOfDay _quietEndTime = const TimeOfDay(hour: 7, minute: 0);
   bool _isLoading = true;
   bool _isPickingAssistantAvatar = false;
   bool _isPickingUserAvatar = false;
@@ -3856,9 +4198,11 @@ class _UserHomePageState extends State<UserHomePage> {
     final userAvatarPath = prefs.getString(_userAvatarPathKey);
     final displayName = prefs.getString(_userDisplayNameKey);
     final bio = prefs.getString(_userBioKey);
+    final birthday = prefs.getString(_userBirthdayKey);
     final testHealthDataEnabled =
         prefs.getBool(_testHealthDataEnabledKey) ?? true;
     final useHrvForStress = prefs.getBool(_useHrvForStressKey) ?? true;
+    final quiet = await _FlowerNotificationService.quietWindow();
     Map<String, dynamic>? answers;
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
@@ -3875,8 +4219,11 @@ class _UserHomePageState extends State<UserHomePage> {
       _userAvatarPath = userAvatarPath;
       _displayName = displayName;
       _bio = bio;
+      _birthday = birthday;
       _testHealthDataEnabled = testHealthDataEnabled;
       _useHrvForStress = useHrvForStress;
+      _quietStartTime = _timeOfDayFromMinutes(quiet.start);
+      _quietEndTime = _timeOfDayFromMinutes(quiet.end);
       _isLoading = false;
     });
   }
@@ -3898,9 +4245,7 @@ class _UserHomePageState extends State<UserHomePage> {
       return;
     }
     setState(() => _useHrvForStress = enabled);
-    _showUserHomeMessage(
-      enabled ? '已开启 HRV 压力估算' : '已关闭 HRV，可手动记录穿戴设备压力值',
-    );
+    _showUserHomeMessage(enabled ? '已开启 HRV 压力估算' : '已关闭 HRV，可手动记录穿戴设备压力值');
   }
 
   Future<void> _changeUserAvatar() async {
@@ -3948,6 +4293,7 @@ class _UserHomePageState extends State<UserHomePage> {
       builder: (context) => _UserProfileEditDialog(
         initialName: currentName,
         initialBio: _bio ?? '',
+        initialBirthday: _birthday ?? _answerText('birthday', fallback: ''),
       ),
     );
     if (result == null) {
@@ -3957,12 +4303,15 @@ class _UserHomePageState extends State<UserHomePage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_userDisplayNameKey, result.name);
     await prefs.setString(_userBioKey, result.bio);
+    await prefs.setString(_userBirthdayKey, result.birthday);
+    await _FlowerNotificationService.scheduleBirthdayGreeting();
     if (!mounted) {
       return;
     }
     setState(() {
       _displayName = result.name;
       _bio = result.bio;
+      _birthday = result.birthday;
     });
     _showUserHomeMessage('个人资料已更新');
   }
@@ -4032,11 +4381,21 @@ class _UserHomePageState extends State<UserHomePage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_newUserQuestionAnswersKey, jsonEncode(savedAnswers));
     await prefs.setBool(_newUserQuestionsCompletedKey, true);
+    final birthday = answers['birthday']?.toString().trim();
+    if (birthday != null && birthday.isNotEmpty) {
+      await prefs.setString(_userBirthdayKey, birthday);
+      await _FlowerNotificationService.scheduleBirthdayGreeting();
+    }
     final reply = await _appendOnboardingReplyToLighthouseChat(savedAnswers);
     if (!mounted) {
       return;
     }
-    setState(() => _answers = savedAnswers);
+    setState(() {
+      _answers = savedAnswers;
+      if (birthday != null && birthday.isNotEmpty) {
+        _birthday = birthday;
+      }
+    });
     _showUserHomeMessage('新手问题已更新');
     if (reply != null) {
       _showLighthouseReplyBanner(context, reply);
@@ -4056,6 +4415,76 @@ class _UserHomePageState extends State<UserHomePage> {
     );
   }
 
+  Future<void> _configureFlowerQuietWindow() async {
+    var start = _quietStartTime;
+    var end = _quietEndTime;
+    final saved = await showDialog<({TimeOfDay start, TimeOfDay end})>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('静静含苞'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _TimeSettingRow(
+                icon: Icons.nightlight_round,
+                label: '开始时间',
+                time: start,
+                onTap: () async {
+                  final picked = await showTimePicker(
+                    context: context,
+                    initialTime: start,
+                  );
+                  if (picked != null) {
+                    setDialogState(() => start = picked);
+                  }
+                },
+              ),
+              const SizedBox(height: 10),
+              _TimeSettingRow(
+                icon: Icons.wb_sunny_outlined,
+                label: '结束时间',
+                time: end,
+                onTap: () async {
+                  final picked = await showTimePicker(
+                    context: context,
+                    initialTime: end,
+                  );
+                  if (picked != null) {
+                    setDialogState(() => end = picked);
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(context).pop((start: start, end: end)),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == null) {
+      return;
+    }
+    await _FlowerNotificationService.setQuietWindow(saved.start, saved.end);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _quietStartTime = saved.start;
+      _quietEndTime = saved.end;
+    });
+    _showUserHomeMessage('静静含苞时间已更新');
+  }
+
   String _answerText(String key, {String fallback = '未填写'}) {
     final value = _answers?[key];
     if (value is List) {
@@ -4072,9 +4501,12 @@ class _UserHomePageState extends State<UserHomePage> {
   Widget build(BuildContext context) {
     final nickname = _displayName?.trim().isNotEmpty == true
         ? _displayName!.trim()
-        : _answerText('nickname', fallback: 'moodland 用户');
+        : _answerText('nickname', fallback: 'MoodLand 用户');
     final stressScore = _answerText('stressScore');
     final bio = _bio?.trim().isNotEmpty == true ? _bio!.trim() : '还没有填写个人简介。';
+    final birthday = _birthday?.trim().isNotEmpty == true
+        ? _birthday!.trim()
+        : _answerText('birthday');
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FFF4),
@@ -4112,7 +4544,7 @@ class _UserHomePageState extends State<UserHomePage> {
                 _UserInfoRow(
                   icon: Icons.cake_outlined,
                   label: '生日',
-                  value: _answerText('birthday'),
+                  value: birthday,
                 ),
                 _UserInfoRow(
                   icon: Icons.mood_outlined,
@@ -4169,6 +4601,14 @@ class _UserHomePageState extends State<UserHomePage> {
                   onChanged: _setUseHrvForStress,
                 ),
                 const SizedBox(height: 10),
+                _SettingsActionTile(
+                  icon: Icons.notifications_off_outlined,
+                  title: '静静含苞，不打扰休息',
+                  subtitle:
+                      '${_formatTime(_quietStartTime)} - ${_formatTime(_quietEndTime)} 之间不发送花时来信。',
+                  onTap: _configureFlowerQuietWindow,
+                ),
+                const SizedBox(height: 10),
                 _SettingsInfoTile(
                   icon: Icons.privacy_tip_outlined,
                   title: '隐私与权限',
@@ -4184,7 +4624,7 @@ class _UserHomePageState extends State<UserHomePage> {
                 _SettingsInfoTile(
                   icon: Icons.info_outline_rounded,
                   title: '应用版本',
-                  subtitle: 'moodland 1.0.0',
+                  subtitle: 'MoodLand 1.0.0',
                 ),
               ],
             ),
@@ -4192,6 +4632,15 @@ class _UserHomePageState extends State<UserHomePage> {
         ),
       ),
     );
+  }
+
+  static TimeOfDay _timeOfDayFromMinutes(int minutes) {
+    final normalized = minutes % (24 * 60);
+    return TimeOfDay(hour: normalized ~/ 60, minute: normalized % 60);
+  }
+
+  static String _formatTime(TimeOfDay time) {
+    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
 }
 
@@ -4232,20 +4681,27 @@ class _UserAvatar extends StatelessWidget {
 }
 
 class _UserProfileEditResult {
-  const _UserProfileEditResult({required this.name, required this.bio});
+  const _UserProfileEditResult({
+    required this.name,
+    required this.bio,
+    required this.birthday,
+  });
 
   final String name;
   final String bio;
+  final String birthday;
 }
 
 class _UserProfileEditDialog extends StatefulWidget {
   const _UserProfileEditDialog({
     required this.initialName,
     required this.initialBio,
+    required this.initialBirthday,
   });
 
   final String initialName;
   final String initialBio;
+  final String initialBirthday;
 
   @override
   State<_UserProfileEditDialog> createState() => _UserProfileEditDialogState();
@@ -4254,18 +4710,21 @@ class _UserProfileEditDialog extends StatefulWidget {
 class _UserProfileEditDialogState extends State<_UserProfileEditDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _bioController;
+  late final TextEditingController _birthdayController;
 
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.initialName);
     _bioController = TextEditingController(text: widget.initialBio);
+    _birthdayController = TextEditingController(text: widget.initialBirthday);
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _bioController.dispose();
+    _birthdayController.dispose();
     super.dispose();
   }
 
@@ -4290,6 +4749,15 @@ class _UserProfileEditDialogState extends State<_UserProfileEditDialog> {
               hintText: '写一句关于自己的状态、偏好或想被怎样陪伴。',
             ),
           ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _birthdayController,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              labelText: '生日',
+              hintText: '例如 5月25日，年份可不填',
+            ),
+          ),
         ],
       ),
       actions: [
@@ -4302,8 +4770,9 @@ class _UserProfileEditDialogState extends State<_UserProfileEditDialog> {
             final name = _nameController.text.trim();
             Navigator.of(context).pop(
               _UserProfileEditResult(
-                name: name.isEmpty ? 'moodland 用户' : name,
+                name: name.isEmpty ? 'MoodLand 用户' : name,
                 bio: _bioController.text.trim(),
+                birthday: _birthdayController.text.trim(),
               ),
             );
           },
@@ -4860,8 +5329,6 @@ class HealthDataDashboardPage extends StatefulWidget {
           : [HealthChartPoint(DateTime.now(), estimate.stressValue)],
     );
   }
-
-  static String _formatMonthDay(DateTime date) => '${date.month}/${date.day}';
 }
 
 class _HealthDataDashboardPageState extends State<HealthDataDashboardPage> {
@@ -4890,6 +5357,9 @@ class _HealthDataDashboardPageState extends State<HealthDataDashboardPage> {
   Future<void> _openManualEntry() async {
     final prefs = await SharedPreferences.getInstance();
     final useHrvForStress = prefs.getBool(_useHrvForStressKey) ?? true;
+    if (!mounted) {
+      return;
+    }
     final entry = await Navigator.of(context).push<ManualHealthEntry>(
       MaterialPageRoute<ManualHealthEntry>(
         builder: (context) =>
@@ -4965,52 +5435,56 @@ class _HealthDataDashboardPageState extends State<HealthDataDashboardPage> {
     final stats = estimate.stats;
     final metrics = [
       HealthDataDashboardPage._stressMetricForEstimate(estimate),
-      _HealthMetric(
-        label: '心率',
-        value: '${stats.averageHeartRate?.round() ?? 0}',
-        unit: '次/分',
-        color: const Color(0xFFE25D56),
-        defaultRange: _HealthMetricRange.day,
-        baseValue: stats.averageHeartRate ?? 72,
-        spread: 9,
-        tilt: 5,
-        samples: stats.heartRateSamples,
-      ),
-      _HealthMetric(
-        label: 'HRV',
-        value: '${stats.averageHrv?.round() ?? 0}',
-        unit: 'ms',
-        color: const Color(0xFF3D8E75),
-        defaultRange: _HealthMetricRange.day,
-        baseValue: stats.averageHrv ?? 42,
-        spread: 7,
-        tilt: -4,
-        samples: stats.hrvSamples,
-      ),
-      _HealthMetric(
-        label: '睡眠',
-        value: (stats.sleepMinutes / 60).toStringAsFixed(1),
-        unit: '小时',
-        color: const Color(0xFF597BC7),
-        defaultRange: _HealthMetricRange.week,
-        baseValue: stats.sleepMinutes / 60,
-        spread: 1.0,
-        tilt: 0.3,
-        samples: stats.sleepSamples
-            .map((sample) => HealthChartPoint(sample.time, sample.value / 60))
-            .toList(),
-      ),
-      _HealthMetric(
-        label: '步数',
-        value: '${stats.steps.round()}',
-        unit: '步',
-        color: const Color(0xFFD19A35),
-        defaultRange: _HealthMetricRange.week,
-        baseValue: stats.steps / 1000,
-        spread: 1.8,
-        tilt: 0.8,
-        samples: stats.stepSamples,
-      ),
+      if (stats.heartRateSamples.isNotEmpty)
+        _HealthMetric(
+          label: '心率',
+          value: '${stats.averageHeartRate?.round() ?? 0}',
+          unit: '次/分',
+          color: const Color(0xFFE25D56),
+          defaultRange: _HealthMetricRange.day,
+          baseValue: stats.averageHeartRate ?? 72,
+          spread: 9,
+          tilt: 5,
+          samples: stats.heartRateSamples,
+        ),
+      if (stats.hrvSamples.isNotEmpty)
+        _HealthMetric(
+          label: 'HRV',
+          value: '${stats.averageHrv?.round() ?? 0}',
+          unit: 'ms',
+          color: const Color(0xFF3D8E75),
+          defaultRange: _HealthMetricRange.day,
+          baseValue: stats.averageHrv ?? 42,
+          spread: 7,
+          tilt: -4,
+          samples: stats.hrvSamples,
+        ),
+      if (stats.sleepSamples.isNotEmpty)
+        _HealthMetric(
+          label: '睡眠',
+          value: (stats.sleepMinutes / 60).toStringAsFixed(1),
+          unit: '小时',
+          color: const Color(0xFF597BC7),
+          defaultRange: _HealthMetricRange.week,
+          baseValue: stats.sleepMinutes / 60,
+          spread: 1.0,
+          tilt: 0.3,
+          samples: stats.sleepSamples
+              .map((sample) => HealthChartPoint(sample.time, sample.value / 60))
+              .toList(),
+        ),
+      if (stats.stepSamples.isNotEmpty)
+        _HealthMetric(
+          label: '步数',
+          value: '${stats.steps.round()}',
+          unit: '步',
+          color: const Color(0xFFD19A35),
+          defaultRange: _HealthMetricRange.week,
+          baseValue: stats.steps / 1000,
+          spread: 1.8,
+          tilt: 0.8,
+          samples: stats.stepSamples,
+        ),
     ];
 
     return Scaffold(
@@ -5116,7 +5590,6 @@ class _HealthDataDashboardPageState extends State<HealthDataDashboardPage> {
       ),
     );
   }
-
 }
 
 class _ManualHealthEntryPage extends StatefulWidget {
@@ -5298,9 +5771,7 @@ class HealthChartPoint {
   final double value;
 }
 
-enum _HealthMetricRange { day, week, month }
-
-enum _HealthMetricPrecision { detailed, standard, overview }
+enum _HealthMetricRange { detailed, day, week, month }
 
 class _HealthMetricCard extends StatelessWidget {
   const _HealthMetricCard({required this.metric});
@@ -5313,7 +5784,6 @@ class _HealthMetricCard extends StatelessWidget {
       samples: _HealthMetricDetailPageState.chartSamplesFor(
         metric,
         metric.defaultRange,
-        _HealthMetricPrecision.standard,
         preview: true,
       ),
     );
@@ -5438,7 +5908,10 @@ class _ScrollableHealthTrendChart extends StatelessWidget {
       builder: (context, constraints) {
         final contentWidth = _contentWidth(
           constraints.maxWidth,
-          metric.samples.length,
+          _HealthMetricDetailPageState.slotCount(range ?? metric.defaultRange),
+        );
+        final window = _HealthMetricDetailPageState.windowFor(
+          range ?? metric.defaultRange,
         );
 
         return Scrollbar(
@@ -5448,7 +5921,13 @@ class _ScrollableHealthTrendChart extends StatelessWidget {
               width: contentWidth,
               child: Column(
                 children: [
-                  Expanded(child: _HealthTrendChart(metric: metric)),
+                  Expanded(
+                    child: _HealthTrendChart(
+                      metric: metric,
+                      windowStart: window.start,
+                      windowEnd: window.end,
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   _HealthChartAxis(
                     labels: _HealthMetricDetailPageState.axisLabelsFor(
@@ -5465,16 +5944,17 @@ class _ScrollableHealthTrendChart extends StatelessWidget {
     );
   }
 
-  double _contentWidth(double viewportWidth, int pointCount) {
-    if (pointCount <= 1) {
+  double _contentWidth(double viewportWidth, int slotCount) {
+    if (slotCount <= 1) {
       return viewportWidth;
     }
-    final minPointSpacing = switch (pointCount) {
-      >= 13 => 54.0,
-      >= 7 => 48.0,
+    final minPointSpacing = switch (slotCount) {
+      >= 100 => 42.0,
+      >= 25 => 52.0,
+      >= 7 => 58.0,
       _ => 64.0,
     };
-    final preferredWidth = (pointCount - 1) * minPointSpacing + 24;
+    final preferredWidth = (slotCount - 1) * minPointSpacing + 24;
     return preferredWidth < viewportWidth ? viewportWidth : preferredWidth;
   }
 }
@@ -5491,12 +5971,11 @@ class _HealthMetricDetailPage extends StatefulWidget {
 
 class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
   late _HealthMetricRange _range = widget.metric.defaultRange;
-  _HealthMetricPrecision _precision = _HealthMetricPrecision.standard;
 
   @override
   Widget build(BuildContext context) {
     final chartMetric = widget.metric.copyWith(
-      samples: chartSamplesFor(widget.metric, _range, _precision),
+      samples: chartSamplesFor(widget.metric, _range),
     );
 
     return Scaffold(
@@ -5518,6 +5997,10 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
               child: SegmentedButton<_HealthMetricRange>(
                 segments: const [
                   ButtonSegment(
+                    value: _HealthMetricRange.detailed,
+                    label: Text('精细'),
+                  ),
+                  ButtonSegment(
                     value: _HealthMetricRange.day,
                     label: Text('日'),
                   ),
@@ -5536,30 +6019,6 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
                 },
               ),
             ),
-            const SizedBox(height: 10),
-            _HealthSegmentPanel(
-              title: '显示精度',
-              child: SegmentedButton<_HealthMetricPrecision>(
-                segments: const [
-                  ButtonSegment(
-                    value: _HealthMetricPrecision.detailed,
-                    label: Text('精细'),
-                  ),
-                  ButtonSegment(
-                    value: _HealthMetricPrecision.standard,
-                    label: Text('标准'),
-                  ),
-                  ButtonSegment(
-                    value: _HealthMetricPrecision.overview,
-                    label: Text('概览'),
-                  ),
-                ],
-                selected: {_precision},
-                onSelectionChanged: (values) {
-                  setState(() => _precision = values.first);
-                },
-              ),
-            ),
             const SizedBox(height: 14),
             Container(
               height: 292,
@@ -5573,7 +6032,7 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    _rangeDescription(_range, _precision),
+                    _rangeDescription(_range),
                     style: const TextStyle(
                       color: Color(0xFF60736C),
                       fontWeight: FontWeight.w700,
@@ -5597,27 +6056,19 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
 
   static List<HealthChartPoint> chartSamplesFor(
     _HealthMetric metric,
-    _HealthMetricRange range,
-    _HealthMetricPrecision precision, {
+    _HealthMetricRange range, {
     bool preview = false,
   }) {
-    final now = DateTime.now();
-    final start = switch (range) {
-      _HealthMetricRange.day => DateTime(
-        now.year,
-        now.month,
-        now.day,
-      ),
-      _HealthMetricRange.week => now.subtract(const Duration(days: 7)),
-      _HealthMetricRange.month => now.subtract(const Duration(days: 30)),
-    };
+    final window = windowFor(range);
     final filtered = [
       for (final sample in metric.samples)
-        if (!sample.time.isBefore(start) && !sample.time.isAfter(now)) sample,
+        if (!sample.time.isBefore(window.start) &&
+            sample.time.isBefore(window.end))
+          sample,
     ]..sort((a, b) => a.time.compareTo(b.time));
 
-    final targetCount = preview ? 8 : _pointCount(range, precision);
-    if (precision == _HealthMetricPrecision.detailed ||
+    final targetCount = preview ? 8 : slotCount(range);
+    if (range == _HealthMetricRange.detailed ||
         filtered.length <= targetCount) {
       return filtered;
     }
@@ -5628,17 +6079,7 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
     List<HealthChartPoint> samples,
     _HealthMetricRange range,
   ) {
-    if (samples.isEmpty) {
-      return const [];
-    }
-    final labelCount = samples.length < 7 ? samples.length : 7;
-    final visible = _evenlySample(samples, labelCount);
-    return [
-      for (final sample in visible)
-        range == _HealthMetricRange.day
-            ? '${sample.time.hour}点'
-            : HealthDataDashboardPage._formatMonthDay(sample.time),
-    ];
+    return labelsFor(range);
   }
 
   static List<T> _evenlySample<T>(List<T> values, int targetCount) {
@@ -5654,38 +6095,68 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
     ];
   }
 
-  static int _pointCount(
-    _HealthMetricRange range,
-    _HealthMetricPrecision precision,
-  ) {
-    return switch ((range, precision)) {
-      (_HealthMetricRange.day, _HealthMetricPrecision.detailed) => 13,
-      (_HealthMetricRange.day, _HealthMetricPrecision.standard) => 7,
-      (_HealthMetricRange.day, _HealthMetricPrecision.overview) => 4,
-      (_HealthMetricRange.week, _HealthMetricPrecision.detailed) => 7,
-      (_HealthMetricRange.week, _HealthMetricPrecision.standard) => 4,
-      (_HealthMetricRange.week, _HealthMetricPrecision.overview) => 3,
-      (_HealthMetricRange.month, _HealthMetricPrecision.detailed) => 15,
-      (_HealthMetricRange.month, _HealthMetricPrecision.standard) => 6,
-      (_HealthMetricRange.month, _HealthMetricPrecision.overview) => 4,
+  static ({DateTime start, DateTime end}) windowFor(_HealthMetricRange range) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return switch (range) {
+      _HealthMetricRange.detailed || _HealthMetricRange.day => (
+        start: today,
+        end: today.add(const Duration(days: 1)),
+      ),
+      _HealthMetricRange.week => (
+        start: today.subtract(Duration(days: today.weekday - 1)),
+        end: today
+            .subtract(Duration(days: today.weekday - 1))
+            .add(const Duration(days: 7)),
+      ),
+      _HealthMetricRange.month => (
+        start: DateTime(now.year, now.month),
+        end: DateTime(now.year, now.month + 1),
+      ),
     };
   }
 
-  static String _rangeDescription(
-    _HealthMetricRange range,
-    _HealthMetricPrecision precision,
-  ) {
-    final rangeText = switch (range) {
-      _HealthMetricRange.day => '一天内',
-      _HealthMetricRange.week => '一周内',
-      _HealthMetricRange.month => '一个月内',
+  static int slotCount(_HealthMetricRange range) {
+    final window = windowFor(range);
+    return switch (range) {
+      _HealthMetricRange.detailed =>
+        window.end.difference(window.start).inMinutes ~/ 10 + 1,
+      _HealthMetricRange.day => window.end.difference(window.start).inHours + 1,
+      _HealthMetricRange.week => window.end.difference(window.start).inDays,
+      _HealthMetricRange.month => window.end.difference(window.start).inDays,
     };
-    final precisionText = switch (precision) {
-      _HealthMetricPrecision.detailed => '精细',
-      _HealthMetricPrecision.standard => '标准',
-      _HealthMetricPrecision.overview => '概览',
+  }
+
+  static List<String> labelsFor(_HealthMetricRange range) {
+    final window = windowFor(range);
+    return switch (range) {
+      _HealthMetricRange.detailed => [
+        for (var i = 0; i <= 24 * 6; i++)
+          if (i % 6 == 0)
+            '${(i ~/ 6).toString().padLeft(2, '0')}:00'
+          else
+            '${(i ~/ 6).toString().padLeft(2, '0')}:${((i % 6) * 10).toString().padLeft(2, '0')}',
+      ],
+      _HealthMetricRange.day => [for (var i = 0; i <= 24; i++) '$i点'],
+      _HealthMetricRange.week => ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
+      _HealthMetricRange.month => [
+        for (
+          var date = window.start;
+          date.isBefore(window.end);
+          date = date.add(const Duration(days: 1))
+        )
+          '${date.day}',
+      ],
     };
-    return '$rangeText · $precisionText显示';
+  }
+
+  static String _rangeDescription(_HealthMetricRange range) {
+    return switch (range) {
+      _HealthMetricRange.detailed => '当天 0点-24点 · 每 10 分钟',
+      _HealthMetricRange.day => '当天 0点-24点 · 每 1 小时',
+      _HealthMetricRange.week => '本周 周一-周日 · 每 1 天',
+      _HealthMetricRange.month => '本月 1号-月底 · 每 1 天',
+    };
   }
 }
 
@@ -5775,9 +6246,15 @@ class _HealthSegmentPanel extends StatelessWidget {
 }
 
 class _HealthTrendChart extends StatefulWidget {
-  const _HealthTrendChart({required this.metric});
+  const _HealthTrendChart({
+    required this.metric,
+    this.windowStart,
+    this.windowEnd,
+  });
 
   final _HealthMetric metric;
+  final DateTime? windowStart;
+  final DateTime? windowEnd;
 
   @override
   State<_HealthTrendChart> createState() => _HealthTrendChartState();
@@ -5804,17 +6281,27 @@ class _HealthTrendChartState extends State<_HealthTrendChart> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
-        final selectedIndex = _selectedIndex != null &&
-                _selectedIndex! < samples.length
+        final selectedIndex =
+            _selectedIndex != null && _selectedIndex! < samples.length
             ? _selectedIndex!
             : null;
         final selectedOffset = selectedIndex == null
             ? null
-            : _HealthTrendChartPainter.offsetsFor(samples, size)[selectedIndex];
+            : _HealthTrendChartPainter.offsetsFor(
+                samples,
+                size,
+                windowStart: widget.windowStart,
+                windowEnd: widget.windowEnd,
+              )[selectedIndex];
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapDown: (details) {
-            final offsets = _HealthTrendChartPainter.offsetsFor(samples, size);
+            final offsets = _HealthTrendChartPainter.offsetsFor(
+              samples,
+              size,
+              windowStart: widget.windowStart,
+              windowEnd: widget.windowEnd,
+            );
             if (offsets.isEmpty) {
               return;
             }
@@ -5837,6 +6324,8 @@ class _HealthTrendChartState extends State<_HealthTrendChart> {
                   samples: samples,
                   color: widget.metric.color,
                   selectedIndex: selectedIndex,
+                  windowStart: widget.windowStart,
+                  windowEnd: widget.windowEnd,
                 ),
                 child: const SizedBox.expand(),
               ),
@@ -5877,7 +6366,7 @@ class _HealthPointTooltip extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: Container(
-        width: 124,
+        constraints: const BoxConstraints(minWidth: 150, maxWidth: 220),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
           color: const Color(0xFFEFF1F4),
@@ -5895,9 +6384,7 @@ class _HealthPointTooltip extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              '${sample.value.round()} ${metric.unit}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              '${_formatValue(sample.value)} ${metric.unit}',
               style: TextStyle(
                 color: metric.color,
                 fontSize: 20,
@@ -5907,8 +6394,6 @@ class _HealthPointTooltip extends StatelessWidget {
             const SizedBox(height: 2),
             Text(
               _formatTooltipTime(sample.time),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: Color(0xFF7B8288),
                 fontWeight: FontWeight.w800,
@@ -5925,6 +6410,10 @@ class _HealthPointTooltip extends StatelessWidget {
     final minute = time.minute.toString().padLeft(2, '0');
     return '${time.month}月${time.day}日 $hour:$minute';
   }
+
+  static String _formatValue(double value) {
+    return value % 1 == 0 ? value.round().toString() : value.toStringAsFixed(1);
+  }
 }
 
 class _HealthTrendChartPainter extends CustomPainter {
@@ -5932,11 +6421,15 @@ class _HealthTrendChartPainter extends CustomPainter {
     required this.samples,
     required this.color,
     required this.selectedIndex,
+    this.windowStart,
+    this.windowEnd,
   });
 
   final List<HealthChartPoint> samples;
   final Color color;
   final int? selectedIndex;
+  final DateTime? windowStart;
+  final DateTime? windowEnd;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -5952,7 +6445,12 @@ class _HealthTrendChartPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    final offsets = offsetsFor(samples, size);
+    final offsets = offsetsFor(
+      samples,
+      size,
+      windowStart: windowStart,
+      windowEnd: windowEnd,
+    );
 
     final fillPath = Path()..moveTo(0, size.height);
     final linePath = Path();
@@ -6000,20 +6498,17 @@ class _HealthTrendChartPainter extends CustomPainter {
         Offset(point.dx, size.height),
         selectedLinePaint,
       );
-      canvas.drawCircle(
-        point,
-        6,
-        Paint()..color = Colors.white,
-      );
-      canvas.drawCircle(
-        point,
-        4,
-        dotPaint,
-      );
+      canvas.drawCircle(point, 6, Paint()..color = Colors.white);
+      canvas.drawCircle(point, 4, dotPaint);
     }
   }
 
-  static List<Offset> offsetsFor(List<HealthChartPoint> samples, Size size) {
+  static List<Offset> offsetsFor(
+    List<HealthChartPoint> samples,
+    Size size, {
+    DateTime? windowStart,
+    DateTime? windowEnd,
+  }) {
     if (samples.isEmpty || size.width <= 0 || size.height <= 0) {
       return const [];
     }
@@ -6023,11 +6518,21 @@ class _HealthTrendChartPainter extends CustomPainter {
     final range = (maxValue - minValue).abs() < 0.01
         ? 1.0
         : maxValue - minValue;
+    final start = windowStart;
+    final end = windowEnd;
+    final totalMs = start == null || end == null
+        ? 0
+        : end.difference(start).inMilliseconds;
     final dx = samples.length == 1 ? 0.0 : size.width / (samples.length - 1);
     return [
       for (var i = 0; i < samples.length; i++)
         Offset(
-          i * dx,
+          totalMs > 0 && start != null
+              ? (samples[i].time.difference(start).inMilliseconds / totalMs)
+                        .clamp(0, 1)
+                        .toDouble() *
+                    size.width
+              : i * dx,
           size.height - ((samples[i].value - minValue) / range) * size.height,
         ),
     ];
@@ -6037,7 +6542,9 @@ class _HealthTrendChartPainter extends CustomPainter {
   bool shouldRepaint(covariant _HealthTrendChartPainter oldDelegate) {
     return oldDelegate.samples != samples ||
         oldDelegate.color != color ||
-        oldDelegate.selectedIndex != selectedIndex;
+        oldDelegate.selectedIndex != selectedIndex ||
+        oldDelegate.windowStart != windowStart ||
+        oldDelegate.windowEnd != windowEnd;
   }
 }
 
@@ -6067,12 +6574,12 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
   static const _newUserQuestionAnswersKey = 'new_user_question_answers';
   static const _apiKey = String.fromEnvironment('AI_WORKER_TOKEN');
   static const _model = String.fromEnvironment(
-  'AI_WORKER_MODEL',
-  defaultValue: 'worker-proxy',
+    'AI_WORKER_MODEL',
+    defaultValue: 'worker-proxy',
   );
   static const _apiUrl = String.fromEnvironment(
-  'AI_WORKER_URL',
-  defaultValue: 'https://ai.moodland.space',
+    'AI_WORKER_URL',
+    defaultValue: 'https://ai.moodland.space',
   );
   static const _initialAssistantMessage = _ChatMessage(
     role: _ChatRole.assistant,
@@ -7013,10 +7520,7 @@ class _DeepSeekChatClient {
       if (recentChat.trim().isNotEmpty) '最近聊天记录：\n$recentChat',
     ].join('\n\n');
 
-    return _sendWorkerRequest(
-      message: '请生成一句首页恢复建议。',
-      context: contextText,
-    );
+    return _sendWorkerRequest(message: '请生成一句首页恢复建议。', context: contextText);
   }
 
   Future<String> gardenReflection({
@@ -7038,10 +7542,7 @@ class _DeepSeekChatClient {
       if (historyText.isNotEmpty) '最近选择历史：\n$historyText',
     ].join('\n\n');
 
-    return _sendWorkerRequest(
-      message: '请给这次选择写一句灯塔回信。',
-      context: contextText,
-    );
+    return _sendWorkerRequest(message: '请给这次选择写一句灯塔回信。', context: contextText);
   }
 
   Future<String> onboardingReply({required String userProfileContext}) async {
@@ -7064,7 +7565,7 @@ class _DeepSeekChatClient {
   }) async {
     final now = DateTime.now();
     final systemContext = [
-      '你是 moodland 应用里的 AI 陪伴者，名字叫“灯塔”，形象也是灯塔。你的核心使命是：不替用户走路，只为用户照亮。',
+      '你是 MoodLand 应用里的 AI 陪伴者，名字叫“灯塔”，形象也是灯塔。你的核心使命是：不替用户走路，只为用户照亮。',
       '你始终用“我”自称。你像灯塔一样守望：不追着船跑，不替船掌舵，只在风浪里给出一个能看见的方向。',
       '你的性格：温柔、沉静、坚定、克制、包容。话不多，每句有分量。不刷屏安慰，不强行正能量，不抢着给答案。',
       '你的语言以口语为主，可以自然使用灯塔、光、海、船、风浪、暗夜、靠岸等意象。不要堆砌比喻，要像在灯塔下安静聊天。',
@@ -7107,10 +7608,7 @@ class _DeepSeekChatClient {
     final response = await http
         .post(
           Uri.parse(apiUrl),
-          headers: {
-            'Content-Type': 'application/json',
-            'X-App-Token': apiKey,
-          },
+          headers: {'Content-Type': 'application/json', 'X-App-Token': apiKey},
           body: jsonEncode({
             'message': message,
             if (context != null && context.trim().isNotEmpty)
@@ -7199,10 +7697,10 @@ Future<String> _generateOnboardingReply(
   Map<String, Object?> answers,
 ) async {
   if (_homeDeepSeekApiKey.isEmpty ||
-    _homeDeepSeekApiUrl.isEmpty ||
-    WidgetsBinding.instance.runtimeType.toString().contains('Test')) {
-  return _localOnboardingReply(answers);
-}
+      _homeDeepSeekApiUrl.isEmpty ||
+      WidgetsBinding.instance.runtimeType.toString().contains('Test')) {
+    return _localOnboardingReply(answers);
+  }
 
   try {
     return await _DeepSeekChatClient(
@@ -9391,7 +9889,10 @@ class HealthStressEstimate {
   final String summary;
   final HealthStressStats stats;
 
-  HealthStressEstimate copyWith({HealthStressStats? stats, double? stressValue}) {
+  HealthStressEstimate copyWith({
+    HealthStressStats? stats,
+    double? stressValue,
+  }) {
     return HealthStressEstimate(
       stressValue: stressValue ?? this.stressValue,
       summary: summary,
@@ -9644,7 +10145,10 @@ class HealthStressStats {
       hrvSamples: _visibleTimedValues([...hrvSamples, ...manualHrvTimed]),
       sleepSamples: sleepSamples,
       stepSamples: stepSamples,
-      stressSamples: _visibleTimedValues([...stressSamples, ...manualStressTimed]),
+      stressSamples: _visibleTimedValues([
+        ...stressSamples,
+        ...manualStressTimed,
+      ]),
     );
   }
 

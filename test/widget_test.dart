@@ -18,7 +18,7 @@ void main() {
       const MoodStressApp(enableHighFidelityIsland: false),
     );
 
-    expect(find.text('moodland'), findsOneWidget);
+    expect(find.text('MoodLand'), findsOneWidget);
     expect(find.text('38'), findsOneWidget);
     expect(find.text('轻微紧绷'), findsOneWidget);
     expect(find.byTooltip('新手指引'), findsOneWidget);
@@ -72,8 +72,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('时间范围'), findsOneWidget);
-    expect(find.text('显示精度'), findsOneWidget);
-    expect(find.text('一天内 · 标准显示'), findsOneWidget);
+    expect(find.text('显示精度'), findsNothing);
+    expect(find.text('精细'), findsOneWidget);
+    expect(find.text('当天 0点-24点 · 每 1 小时'), findsOneWidget);
   });
 
   testWidgets('stress home can open home guide overlay', (tester) async {
@@ -85,7 +86,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('欢迎来到 moodland'), findsOneWidget);
+    expect(find.text('欢迎来到 MoodLand'), findsOneWidget);
     expect(find.textContaining('压力值、健康数据、情绪记录和灯塔对话'), findsOneWidget);
 
     await tester.tap(find.text('下一步'));
@@ -108,7 +109,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('欢迎来到 moodland'), findsOneWidget);
+    expect(find.text('欢迎来到 MoodLand'), findsOneWidget);
     expect(find.textContaining('这里会把压力值'), findsOneWidget);
     expect(find.text('新手问题'), findsNothing);
   });
@@ -153,8 +154,8 @@ void main() {
     expect(find.text('每天'), findsOneWidget);
     expect(find.text('工作日'), findsOneWidget);
     expect(find.text('自定义'), findsOneWidget);
-    expect(find.text('静待花开'), findsOneWidget);
-    expect(find.text('晚上11点到早上7点，花会静静含苞，不打扰你休息。'), findsOneWidget);
+    expect(find.text('先选择提醒方向'), findsOneWidget);
+    expect(find.text('再选择具体提醒事项'), findsOneWidget);
 
     await tester.scrollUntilVisible(
       find.text('保存提醒'),
@@ -277,54 +278,32 @@ void main() {
     expect(find.text('当前压力趋势'), findsOneWidget);
     expect(find.byTooltip('手动记录'), findsOneWidget);
     expect(find.text('压力值'), findsOneWidget);
-    expect(find.text('心率'), findsOneWidget);
-    expect(find.text('暂无真实数据'), findsWidgets);
+    expect(find.text('心率'), findsNothing);
 
-    await tester.tap(
-      find.ancestor(of: find.text('心率'), matching: find.byType(InkWell)).first,
-    );
+    await tester.tap(find.text('压力值').last);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('时间范围'), findsOneWidget);
-    expect(find.text('显示精度'), findsOneWidget);
-    expect(find.text('一天内 · 标准显示'), findsOneWidget);
+    expect(find.text('显示精度'), findsNothing);
+    expect(find.text('当天 0点-24点 · 每 1 小时'), findsOneWidget);
 
     await tester.tap(find.text('月'));
     await tester.pump();
     await tester.tap(find.text('精细'));
     await tester.pump();
 
-    expect(find.text('一个月内 · 精细显示'), findsOneWidget);
+    expect(find.text('当天 0点-24点 · 每 10 分钟'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Back').last);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pageBack();
+    await tester.pumpAndSettle();
 
-    await tester.scrollUntilVisible(
-      find.text('HRV'),
-      180,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('HRV'), findsOneWidget);
+    expect(find.text('HRV'), findsNothing);
+    expect(find.text('睡眠'), findsNothing);
+    expect(find.text('步数'), findsNothing);
 
-    await tester.scrollUntilVisible(
-      find.text('睡眠'),
-      220,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('睡眠'), findsOneWidget);
-
-    await tester.scrollUntilVisible(
-      find.text('步数'),
-      260,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('步数'), findsOneWidget);
-
-    await tester.tap(find.byTooltip('手动记录'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.byIcon(Icons.edit_note_rounded));
+    await tester.pumpAndSettle();
 
     expect(find.text('手动记录'), findsOneWidget);
     expect(find.text('最近的心率 HR'), findsOneWidget);
@@ -395,7 +374,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('新手问题'), findsWidgets);
-    expect(find.text('先让 moodland 认识一下你。'), findsOneWidget);
+    expect(find.text('先让 MoodLand 认识一下你。'), findsOneWidget);
   });
 
   testWidgets('deepseek chat page starts a new conversation', (tester) async {
