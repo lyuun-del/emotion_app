@@ -278,7 +278,9 @@ void main() {
     expect(find.text('当前压力趋势'), findsOneWidget);
     expect(find.byTooltip('手动记录'), findsOneWidget);
     expect(find.text('压力值'), findsOneWidget);
-    expect(find.text('心率'), findsNothing);
+    expect(find.text('心率'), findsOneWidget);
+    expect(find.text('暂无'), findsWidgets);
+    expect(find.text('暂无真实数据'), findsWidgets);
 
     await tester.tap(find.text('压力值').last);
     await tester.pump();
@@ -298,9 +300,26 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
-    expect(find.text('HRV'), findsNothing);
-    expect(find.text('睡眠'), findsNothing);
-    expect(find.text('步数'), findsNothing);
+    await tester.scrollUntilVisible(
+      find.text('HRV'),
+      180,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('HRV'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('睡眠'),
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('睡眠'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('步数'),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('步数'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.edit_note_rounded));
     await tester.pumpAndSettle();
