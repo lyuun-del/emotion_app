@@ -6069,12 +6069,12 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
           sample,
     ]..sort((a, b) => a.time.compareTo(b.time));
 
+    final bucketed = _bucketedAverageSamples(filtered, range, window);
     final targetCount = preview ? 8 : slotCount(range);
-    if (range == _HealthMetricRange.detailed ||
-        filtered.length <= targetCount) {
-      return filtered;
+    if (bucketed.length <= targetCount) {
+      return bucketed;
     }
-    return _evenlySample(filtered, targetCount);
+    return _evenlySample(bucketed, targetCount);
   }
 
   static List<String> axisLabelsFor(
@@ -6095,6 +6095,54 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
       for (var i = 0; i < targetCount; i++)
         values[(i * (values.length - 1) / (targetCount - 1)).round()],
     ];
+  }
+
+  static List<HealthChartPoint> _bucketedAverageSamples(
+    List<HealthChartPoint> samples,
+    _HealthMetricRange range,
+    ({DateTime start, DateTime end}) window,
+  ) {
+    if (samples.isEmpty) {
+      return const [];
+    }
+    final bucketDuration = _bucketDurationFor(range);
+    final bucketValues = <int, List<double>>{};
+    for (final sample in samples) {
+      final offset = sample.time.difference(window.start);
+      if (offset.isNegative) {
+        continue;
+      }
+      final index = offset.inMilliseconds ~/ bucketDuration.inMilliseconds;
+      final bucketStart = window.start.add(bucketDuration * index);
+      if (!bucketStart.isBefore(window.end)) {
+        continue;
+      }
+      bucketValues.putIfAbsent(index, () => <double>[]).add(sample.value);
+    }
+    final bucketed = [
+      for (final entry in bucketValues.entries)
+        HealthChartPoint(
+          window.start.add(bucketDuration * entry.key),
+          _averageBucket(entry.value),
+        ),
+    ]..sort((a, b) => a.time.compareTo(b.time));
+    return bucketed;
+  }
+
+  static Duration _bucketDurationFor(_HealthMetricRange range) {
+    return switch (range) {
+      _HealthMetricRange.detailed => const Duration(minutes: 10),
+      _HealthMetricRange.day => const Duration(hours: 1),
+      _HealthMetricRange.week ||
+      _HealthMetricRange.month => const Duration(days: 1),
+    };
+  }
+
+  static double _averageBucket(List<double> values) {
+    if (values.isEmpty) {
+      return 0;
+    }
+    return values.reduce((a, b) => a + b) / values.length;
   }
 
   static ({DateTime start, DateTime end}) windowFor(_HealthMetricRange range) {
@@ -9827,8 +9875,12 @@ class HealthStressEstimator {
     }
 
     final now = DateTime.now();
-    final start = now.subtract(const Duration(hours: 24));
-    final baselineStart = now.subtract(const Duration(days: 30));
+    final today = DateTime(now.year, now.month, now.day);
+    final monthStart = DateTime(now.year, now.month);
+    final weekStart = today.subtract(Duration(days: today.weekday - 1));
+    final start = monthStart.isBefore(weekStart) ? monthStart : weekStart;
+    final recentStart = now.subtract(const Duration(hours: 24));
+    final baselineStart = start.subtract(const Duration(days: 30));
     final data = await health.getHealthDataFromTypes(
       types: availableTypes,
       startTime: start,
@@ -9837,29 +9889,40 @@ class HealthStressEstimator {
     final baselineData = await health.getHealthDataFromTypes(
       types: availableTypes,
       startTime: baselineStart,
-      endTime: start,
+      endTime: recentStart,
     );
 
     final stats = HealthStressStats.fromData(data);
+    final recentStats = HealthStressStats.fromData(
+      data.where((point) => !point.dateFrom.isBefore(recentStart)).toList(),
+    );
     final manualEntries = await ManualHealthEntryStore.load();
     final recentManualEntries = manualEntries
-        .where((entry) => entry.createdAt.isAfter(start))
+        .where((entry) => !entry.createdAt.isBefore(start))
         .toList();
     final baselineStats = HealthStressStats.fromData(baselineData);
     final mergedStats = stats.mergeManualEntries(recentManualEntries);
+    final recentMergedStats = recentStats.mergeManualEntries(
+      recentManualEntries
+          .where((entry) => !entry.createdAt.isBefore(recentStart))
+          .toList(),
+    );
     if (!stats.hasAnySignal) {
       if (recentManualEntries.isEmpty) {
         throw HealthStressPermissionException(
           Platform.isAndroid
-              ? 'Health Connect 近 24 小时没有可用的心率、HRV、睡眠或步数数据。现在可先手动录入或使用测试数据。'
-              : '近 24 小时没有可用的心率、HRV、睡眠或步数数据。',
+              ? 'Health Connect 没有可用的心率、HRV、睡眠或步数数据。现在可先手动录入或使用测试数据。'
+              : '没有可用的心率、HRV、睡眠或步数数据。',
         );
       }
     }
     final heartRateBaseline =
         baselineStats.averageRestingHeartRate ?? baselineStats.averageHeartRate;
     final hrvBaseline = baselineStats.averageHrv;
-    final result = mergedStats.calculateStress(
+    final calculationStats = recentMergedStats.hasAnySignal
+        ? recentMergedStats
+        : mergedStats;
+    final result = calculationStats.calculateStress(
       heartRateBaseline: heartRateBaseline,
       hrvBaseline: hrvBaseline,
       lastStress: lastStress,
@@ -10067,11 +10130,8 @@ class HealthStressStats {
 
     final missing = <String>[
       if (heartRate == null) '最近心率 HR',
-      if (useHrv && hrv == null) '当前 HRV',
       if (resolvedHeartRateBaseline == null || resolvedHeartRateBaseline <= 0)
         '心率基线 HR_baseline',
-      if (useHrv && (hrvBaseline == null || hrvBaseline <= 0))
-        'HRV 基线 HRV_baseline',
       if (!useHrv && wearableStress == null) '穿戴设备压力值',
     ];
     if (missing.isNotEmpty) {
@@ -10084,7 +10144,11 @@ class HealthStressStats {
     final currentHeartRate = heartRate!;
     final currentHeartRateBaseline = resolvedHeartRateBaseline!;
 
-    if (currentHeartRate > currentHeartRateBaseline * 1.45) {
+    if (_looksLikePhysicalActivity(
+      heartRate: currentHeartRate,
+      baseline: currentHeartRateBaseline,
+      at: DateTime.now(),
+    )) {
       return HealthStressCalculation(
         stressValue: safeLastStress.roundToDouble(),
         summary: '活动中，暂停压力判断',
@@ -10097,15 +10161,19 @@ class HealthStressStats {
     final heartRateScore = (heartRateDelta / 0.30 * 100)
         .clamp(0, 100)
         .toDouble();
-    if (!useHrv) {
+    final canUseHrv =
+        useHrv && hrv != null && hrvBaseline != null && hrvBaseline > 0;
+    if (!canUseHrv) {
+      final hrvFallbackText = useHrv ? ' · HRV 数据缺失，暂用心率估算' : '';
       return HealthStressCalculation(
         stressValue: heartRateScore.roundToDouble(),
-        summary: '$summary · 未使用 HRV · 心率分 ${heartRateScore.round()}',
+        summary:
+            '$summary$hrvFallbackText · 未使用 HRV · 心率分 ${heartRateScore.round()}',
       );
     }
 
-    final currentHrv = hrv!;
-    final currentHrvBaseline = hrvBaseline!;
+    final currentHrv = hrv;
+    final currentHrvBaseline = hrvBaseline;
     final hrvDelta = (currentHrvBaseline - currentHrv) / currentHrvBaseline;
     final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
     final rawStress = hrvScore * 0.65 + heartRateScore * 0.35;
@@ -10208,28 +10276,22 @@ class HealthStressStats {
     required double lastStress,
     required bool useHrv,
   }) {
-    if ((!useHrv || averageHrv == null) && stressSamples.isNotEmpty) {
-      return this;
-    }
     final resolvedHeartRateBaseline =
         averageRestingHeartRate ?? heartRateBaseline;
     if (resolvedHeartRateBaseline == null ||
         resolvedHeartRateBaseline <= 0 ||
-        hrvBaseline == null ||
-        hrvBaseline <= 0 ||
-        heartRateSamples.isEmpty ||
-        hrvSamples.isEmpty) {
+        heartRateSamples.isEmpty) {
       return this;
     }
 
     final pairedSamples = <HealthChartPoint>[];
     final pausedStress = lastStress.clamp(0, 100).toDouble();
     for (final heartRate in heartRateSamples) {
-      final hrv = _nearestSample(hrvSamples, heartRate.time);
-      if (hrv == null) {
-        continue;
-      }
-      if (heartRate.value > resolvedHeartRateBaseline * 1.45) {
+      if (_looksLikePhysicalActivity(
+        heartRate: heartRate.value,
+        baseline: resolvedHeartRateBaseline,
+        at: heartRate.time,
+      )) {
         pairedSamples.add(HealthChartPoint(heartRate.time, pausedStress));
         continue;
       }
@@ -10239,9 +10301,16 @@ class HealthStressStats {
       final heartRateScore = (heartRateDelta / 0.30 * 100)
           .clamp(0, 100)
           .toDouble();
-      final hrvDelta = (hrvBaseline - hrv.value) / hrvBaseline;
-      final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
-      final rawStress = hrvScore * 0.65 + heartRateScore * 0.35;
+      final hrv = _nearestSample(hrvSamples, heartRate.time);
+      final canUseHrv =
+          useHrv && hrv != null && hrvBaseline != null && hrvBaseline > 0;
+      final rawStress = canUseHrv
+          ? (() {
+              final hrvDelta = (hrvBaseline - hrv.value) / hrvBaseline;
+              final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
+              return hrvScore * 0.65 + heartRateScore * 0.35;
+            })()
+          : heartRateScore;
       pairedSamples.add(
         HealthChartPoint(heartRate.time, rawStress.clamp(0, 100).toDouble()),
       );
@@ -10277,14 +10346,39 @@ class HealthStressStats {
     return nearestDiff <= const Duration(hours: 3) ? nearest : null;
   }
 
+  bool _looksLikePhysicalActivity({
+    required double heartRate,
+    required double baseline,
+    required DateTime at,
+  }) {
+    if (baseline <= 0) {
+      return false;
+    }
+    final ratio = heartRate / baseline;
+    if (ratio >= 1.75) {
+      return true;
+    }
+    if (ratio < 1.55) {
+      return false;
+    }
+    return _nearbySteps(at, window: const Duration(minutes: 20)) >= 80;
+  }
+
+  double _nearbySteps(DateTime at, {required Duration window}) {
+    final start = at.subtract(window);
+    final end = at.add(window);
+    return stepSamples
+        .where(
+          (sample) => !sample.time.isBefore(start) && !sample.time.isAfter(end),
+        )
+        .fold<double>(0, (total, sample) => total + sample.value);
+  }
+
   static List<HealthChartPoint> _visibleTimedValues(
     List<HealthChartPoint> values,
   ) {
     final sorted = [...values]..sort((a, b) => a.time.compareTo(b.time));
-    final visible = sorted.length > 24
-        ? sorted.sublist(sorted.length - 24)
-        : sorted;
-    return visible;
+    return sorted;
   }
 }
 
