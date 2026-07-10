@@ -8,19 +8,26 @@
 
 /* Begin PBXBuildFile section */
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
+		18F28F11B2D232C201DEDB07 /* HealthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1BA0C326702B9E88C6558AB8 /* HealthKit.framework */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		70CE14BF20BF1CFC3BEA5E03 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 95986D20582412551EF7BCAA /* Pods_RunnerTests.framework */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
+		813DEF1CE43E0AD53FF0D6DB /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F40BFF0B0BE865759DB4EBC /* Foundation.framework */; };
+		960ABF789047F136B77661B9 /* MoodLandWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = C7A8BD5400DEA99830679DBB /* MoodLandWatch.app */; };
+		96EBA40690071364EF9CC3E5 /* WatchHealthStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 349B5866C2CB6CD9DFCF9D5E /* WatchHealthStore.swift */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		B00100000000000000000001 /* MoodWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000011 /* MoodWidget.swift */; };
 		B00100000000000000000002 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000012 /* Assets.xcassets */; };
 		B00100000000000000000003 /* MoodWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B00100000000000000000014 /* MoodWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B5600AC0267651BC36AE3AC1 /* MoodLandWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980F9062EAEEEC2BAE8F2DFD /* MoodLandWatchApp.swift */; };
+		E001B95CBF9782B415A53B26 /* WatchHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB138EA2F781EC115D8756BB /* WatchHomeView.swift */; };
 		E5FF5DB2BAD369AA9C8AB24D /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5A492F42586639EE5A393028 /* Pods_Runner.framework */; };
+		FA75599A1A75D0CF7ADD8EBE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1DD822CB27A8150DE0ECDD32 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -37,6 +44,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = B00100000000000000000031;
 			remoteInfo = MoodWidget;
+		};
+		D7F158266F2D351294F9883C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 97C146E61CF9000F007C117D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BFAA34F536C63D224843C9CF;
+			remoteInfo = MoodLandWatch;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -62,17 +76,32 @@
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CCB913A3CF414455BA8D7E46 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Watch;
+			dstSubfolderSpec = 1;
+			files = (
+				960ABF789047F136B77661B9 /* MoodLandWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		0CD81A14C0FDF43D48EDFDC6 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
 		1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
+		1BA0C326702B9E88C6558AB8 /* HealthKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = HealthKit.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS11.0.sdk/System/Library/Frameworks/HealthKit.framework; sourceTree = DEVELOPER_DIR; };
+		1DD822CB27A8150DE0ECDD32 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		349B5866C2CB6CD9DFCF9D5E /* WatchHealthStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchHealthStore.swift; sourceTree = "<group>"; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		4086E6F1F146B1C5E2EDF378 /* Pods-Runner.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.profile.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"; sourceTree = "<group>"; };
 		42096AE016968EDCE8B3A6CF /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
+		4F40BFF0B0BE865759DB4EBC /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS11.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		5A492F42586639EE5A393028 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -89,11 +118,14 @@
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		980F9062EAEEEC2BAE8F2DFD /* MoodLandWatchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MoodLandWatchApp.swift; sourceTree = "<group>"; };
 		AE8E0F312BF6E91B00A115F8 /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
 		B00100000000000000000011 /* MoodWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoodWidget.swift; sourceTree = "<group>"; };
 		B00100000000000000000012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B00100000000000000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B00100000000000000000014 /* MoodWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MoodWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BB138EA2F781EC115D8756BB /* WatchHomeView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchHomeView.swift; sourceTree = "<group>"; };
+		C7A8BD5400DEA99830679DBB /* MoodLandWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MoodLandWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CDB83C774D07F36A8FD1DC09 /* Pods-RunnerTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.release.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -112,6 +144,15 @@
 			files = (
 				78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */,
 				E5FF5DB2BAD369AA9C8AB24D /* Pods_Runner.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5044A506A2099A71080989E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				813DEF1CE43E0AD53FF0D6DB /* Foundation.framework in Frameworks */,
+				18F28F11B2D232C201DEDB07 /* HealthKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -146,11 +187,21 @@
 			path = RunnerTests;
 			sourceTree = "<group>";
 		};
+		520F44E2CD83BB4E768C9E33 /* watchOS */ = {
+			isa = PBXGroup;
+			children = (
+				4F40BFF0B0BE865759DB4EBC /* Foundation.framework */,
+				1BA0C326702B9E88C6558AB8 /* HealthKit.framework */,
+			);
+			name = watchOS;
+			sourceTree = "<group>";
+		};
 		69813BD91895B9EC5CDE72DA /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
 				5A492F42586639EE5A393028 /* Pods_Runner.framework */,
 				95986D20582412551EF7BCAA /* Pods_RunnerTests.framework */,
+				520F44E2CD83BB4E768C9E33 /* watchOS */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -177,6 +228,7 @@
 				331C8082294A63A400263BE5 /* RunnerTests */,
 				218625AB5B8BCE927CADD60F /* Pods */,
 				69813BD91895B9EC5CDE72DA /* Frameworks */,
+				A86B007ACB7FFA19FE8F7B2F /* MoodLandWatch */,
 			);
 			sourceTree = "<group>";
 		};
@@ -186,6 +238,7 @@
 				97C146EE1CF9000F007C117D /* Runner.app */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
 				B00100000000000000000014 /* MoodWidget.appex */,
+				C7A8BD5400DEA99830679DBB /* MoodLandWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -205,6 +258,18 @@
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
+			sourceTree = "<group>";
+		};
+		A86B007ACB7FFA19FE8F7B2F /* MoodLandWatch */ = {
+			isa = PBXGroup;
+			children = (
+				980F9062EAEEEC2BAE8F2DFD /* MoodLandWatchApp.swift */,
+				BB138EA2F781EC115D8756BB /* WatchHomeView.swift */,
+				349B5866C2CB6CD9DFCF9D5E /* WatchHealthStore.swift */,
+				1DD822CB27A8150DE0ECDD32 /* Assets.xcassets */,
+			);
+			name = MoodLandWatch;
+			path = MoodLandWatch;
 			sourceTree = "<group>";
 		};
 		B00100000000000000000061 /* MoodWidget */ = {
@@ -250,6 +315,7 @@
 				97C146EC1CF9000F007C117D /* Resources */,
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				B00100000000000000000024 /* Embed App Extensions */,
+				CCB913A3CF414455BA8D7E46 /* Embed Watch Content */,
 				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
 				4A4C5A97761569BCAD652712 /* [CP] Embed Pods Frameworks */,
 			);
@@ -257,6 +323,7 @@
 			);
 			dependencies = (
 				B00100000000000000000052 /* PBXTargetDependency */,
+				E0E8ED6D8EFCB395751F98A8 /* PBXTargetDependency */,
 			);
 			name = Runner;
 			packageProductDependencies = (
@@ -282,6 +349,23 @@
 			productName = MoodWidget;
 			productReference = B00100000000000000000014 /* MoodWidget.appex */;
 			productType = "com.apple.product-type.app-extension";
+		};
+		BFAA34F536C63D224843C9CF /* MoodLandWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2CCA87B65C378B6AF5EA461B /* Build configuration list for PBXNativeTarget "MoodLandWatch" */;
+			buildPhases = (
+				3E980FC3225758D14B356A54 /* Sources */,
+				A5044A506A2099A71080989E /* Frameworks */,
+				3F7864E0826E2D0BBDF6723A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MoodLandWatch;
+			productName = MoodLandWatch;
+			productReference = C7A8BD5400DEA99830679DBB /* MoodLandWatch.app */;
+			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
@@ -330,6 +414,7 @@
 				97C146ED1CF9000F007C117D /* Runner */,
 				331C8080294A63A400263BE5 /* RunnerTests */,
 				B00100000000000000000031 /* MoodWidget */,
+				BFAA34F536C63D224843C9CF /* MoodLandWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -339,6 +424,14 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3F7864E0826E2D0BBDF6723A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FA75599A1A75D0CF7ADD8EBE /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -467,6 +560,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		3E980FC3225758D14B356A54 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B5600AC0267651BC36AE3AC1 /* MoodLandWatchApp.swift in Sources */,
+				E001B95CBF9782B415A53B26 /* WatchHomeView.swift in Sources */,
+				96EBA40690071364EF9CC3E5 /* WatchHealthStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		97C146EA1CF9000F007C117D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -497,6 +600,12 @@
 			isa = PBXTargetDependency;
 			target = B00100000000000000000031 /* MoodWidget */;
 			targetProxy = B00100000000000000000051 /* PBXContainerItemProxy */;
+		};
+		E0E8ED6D8EFCB395751F98A8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MoodLandWatch;
+			target = BFAA34F536C63D224843C9CF /* MoodLandWatch */;
+			targetProxy = D7F158266F2D351294F9883C /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -597,6 +706,38 @@
 			};
 			name = Profile;
 		};
+		2BD90B68C3399BF360A11B80 /* Profile */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MoodLandWatch/MoodLandWatch.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2PBF47Q9JS;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MoodLand;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "用于读取心率和 HRV，帮助在手表上估算压力状态。";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.Xinyu.MoodLand;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.Xinyu.MoodLand.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Profile;
+		};
 		331C8088294A63A400263BE5 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 8E89037743C4BD308C0721D2 /* Pods-RunnerTests.debug.xcconfig */;
@@ -646,6 +787,37 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Runner.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Runner";
 			};
 			name = Profile;
+		};
+		61E3A99AD5440AE518943E4E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MoodLandWatch/MoodLandWatch.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2PBF47Q9JS;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MoodLand;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "用于读取心率和 HRV，帮助在手表上估算压力状态。";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.Xinyu.MoodLand;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.Xinyu.MoodLand.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
 		};
 		97C147031CF9000F007C117D /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -892,9 +1064,51 @@
 			};
 			name = Profile;
 		};
+		FBF0783F6BB740F532A28C64 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MoodLandWatch/MoodLandWatch.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2PBF47Q9JS;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MoodLand;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "用于读取心率和 HRV，帮助在手表上估算压力状态。";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.Xinyu.MoodLand;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.Xinyu.MoodLand.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		2CCA87B65C378B6AF5EA461B /* Build configuration list for PBXNativeTarget "MoodLandWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FBF0783F6BB740F532A28C64 /* Release */,
+				61E3A99AD5440AE518943E4E /* Debug */,
+				2BD90B68C3399BF360A11B80 /* Profile */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		331C8087294A63A400263BE5 /* Build configuration list for PBXNativeTarget "RunnerTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
