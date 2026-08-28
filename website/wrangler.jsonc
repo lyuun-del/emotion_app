@@ -3,5 +3,11 @@
   "name": "moodland-website",
   "main": "vinext/server/app-router-entry",
   "compatibility_date": "2026-08-27",
-  "compatibility_flags": ["nodejs_compat"]
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    {
+      "pattern": "www.moodland.space",
+      "custom_domain": true
+    }
+  ]
 }
