@@ -39,7 +39,7 @@ export default function Home() {
           <p className="eyebrow">YOUR EMOTIONS, A PLACE TO LAND</p>
           <h1><span>给情绪一座岛，</span><span>也给自己一点时间。</span></h1>
           <p className="lead">MoodLand 把身体的信号、当下的心情与温柔的陪伴，安放在一座会与你一起呼吸的小岛上。</p>
-          <div className="hero-actions"><a className="primary-button" href="#product">看看真实的 MoodLand</a><a className="text-button" href="#features">探索小岛 <span>↗</span></a></div>
+          <div className="hero-actions"><a className="primary-button" href="#product">看看真实的 MoodLand</a><a className="testflight-button" href="/testflight" target="_blank" rel="noreferrer">加入 TestFlight <span>↗</span></a><a className="text-button" href="#features">探索小岛 <span>↗</span></a></div>
         </div>
 
         <a className="scroll-cue" href="#explore" aria-label="向下探索"><span>向下探索</span><i /></a>
@@ -117,7 +117,7 @@ export default function Home() {
         <div className="story-points"><p className="reveal"><strong>一座属于你的岛</strong><span>白昼与夜晚会随时间变化，记录也会慢慢塑造这座岛。</span></p><p className="reveal"><strong>一位一直亮着的灯塔</strong><span>无论想倾诉、梳理情绪，还是只想安静一下，它都在这里。</span></p><p className="reveal"><strong>一份由你掌握的记录</strong><span>我们认真对待健康与情绪数据，也尊重你决定如何使用它。</span></p></div>
       </section>
 
-      <section className="closing-section"><div className="reveal"><p className="section-kicker">COMING SOON</p><h2>准备好登上<br />自己的情绪小岛了吗？</h2></div><a className="closing-button" href="mailto:hello@moodland.app">加入内测 <span>→</span></a></section>
+      <section className="closing-section"><div className="reveal"><p className="section-kicker">COMING SOON</p><h2>准备好登上<br />自己的情绪小岛了吗？</h2></div><a className="closing-button" href="/testflight" target="_blank" rel="noreferrer">加入内测 <span>→</span></a></section>
       <footer className="page-shell"><a className="brand" href="#top"><span className="brand-mark">M</span><span>MoodLand</span></a><p>给情绪一座岛，也给自己一点时间。</p><span>© 2026 MoodLand</span></footer>
     </main>
   );
