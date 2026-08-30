@@ -714,11 +714,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = MoodLandWatch/MoodLandWatch.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = 2PBF47Q9JS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MoodLand;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "用于读取心率和 HRV，帮助在手表上估算压力状态。";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "用于将手表检测到的心率和 HRV 同步到健康数据，并更新压力状态。";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.Xinyu.MoodLand;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -796,11 +797,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = MoodLandWatch/MoodLandWatch.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = 2PBF47Q9JS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MoodLand;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "用于读取心率和 HRV，帮助在手表上估算压力状态。";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "用于将手表检测到的心率和 HRV 同步到健康数据，并更新压力状态。";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.Xinyu.MoodLand;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -989,7 +991,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = 2PBF47Q9JS;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MoodWidget/Info.plist;
@@ -1018,7 +1020,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = 2PBF47Q9JS;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MoodWidget/Info.plist;
@@ -1045,7 +1047,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = 2PBF47Q9JS;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MoodWidget/Info.plist;
@@ -1072,11 +1074,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = MoodLandWatch/MoodLandWatch.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = 2PBF47Q9JS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MoodLand;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "用于读取心率和 HRV，帮助在手表上估算压力状态。";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "用于将手表检测到的心率和 HRV 同步到健康数据，并更新压力状态。";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.Xinyu.MoodLand;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
