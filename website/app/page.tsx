@@ -83,7 +83,7 @@ export default function Home() {
               <div className="card-scene">
                 {group.index === '01' && <Image className="journey-art journey-art-cabin" src="/cabin.webp" width={1536} height={1024} sizes="(max-width: 820px) calc(100vw - 88px), 30vw" alt="夜晚亮着温暖灯光的 MoodLand 木屋" unoptimized />}
                 {group.index === '02' && <Image className="journey-art journey-art-lighthouse" src="/lighthouse.webp" width={1217} height={1293} sizes="(max-width: 820px) calc(100vw - 88px), 26vw" alt="坐落在小岛上的 MoodLand 灯塔" unoptimized />}
-                {group.index === '03' && <div className="garden" aria-hidden="true"><span>✿</span><span>❀</span><span>✾</span><span>❧</span></div>}
+                {group.index === '03' && <Image className="journey-art journey-art-garden" src="/garden.webp" width={1312} height={1199} sizes="(max-width: 820px) calc(100vw - 88px), 25vw" alt="在 MoodLand 花园中盛开的蓝色花朵" unoptimized />}
               </div>
               <div className="card-copy"><h3>{group.title}</h3><p>{group.description}</p><ul>{group.capabilities.map((capability) => <li key={capability}>{capability}</li>)}</ul></div>
             </article>

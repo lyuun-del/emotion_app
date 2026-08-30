@@ -110,11 +110,7 @@ img { display: block; max-width: 100%; }
 .journey-art { width: auto; height: auto; max-width: 100%; object-fit: contain; filter: drop-shadow(0 22px 24px rgba(28,45,40,.14)); }
 .journey-art-cabin { width: min(390px, 108%); }
 .journey-art-lighthouse { width: min(285px, 80%); max-height: 310px; }
-.garden { display: flex; align-items: end; gap: 17px; height: 100%; color: #b85947; }
-.garden span { font-family: var(--font-brand-cn); font-size: 64px; transform-origin: bottom; }
-.garden span:nth-child(2) { font-size: 104px; color: #fff1cb; }
-.garden span:nth-child(3) { font-size: 78px; color: #6e8463; }
-.garden span:nth-child(4) { font-size: 52px; color: #d87555; }
+.journey-art-garden { width: min(300px, 82%); max-height: 318px; }
 .card-copy h3 { margin: 0 0 11px; font-family: var(--font-brand-cn); font-size: clamp(30px, 2.3vw, 38px); font-weight: 400; line-height: 1.35; }
 .card-copy > p { margin: 0; max-width: 350px; font-size: 13px; line-height: 1.8; opacity: .74; }
 .card-copy ul { display: flex; flex-wrap: wrap; gap: 7px; margin: 22px 0 0; padding: 0; list-style: none; }
