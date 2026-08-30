@@ -13,6 +13,21 @@ void main() {
     });
   });
 
+  test('future intent parser extracts an exact reminder draft', () {
+    final draft = FlowerLetterIntentParser.parse(
+      '明天下午3点提醒我交报告',
+      now: DateTime(2026, 8, 29, 10),
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.scheduledAt, DateTime(2026, 8, 30, 15));
+    expect(draft.event, contains('交报告'));
+    expect(
+      FlowerLetterIntentParser.parse('今天心情有点乱', now: DateTime(2026, 8, 29, 10)),
+      isNull,
+    );
+  });
+
   testWidgets('stress home renders current status', (tester) async {
     await tester.pumpWidget(
       const MoodStressApp(enableHighFidelityIsland: false),
@@ -20,7 +35,7 @@ void main() {
 
     expect(find.text('MoodLand'), findsOneWidget);
     expect(find.text('38'), findsOneWidget);
-    expect(find.text('轻微紧绷'), findsOneWidget);
+    expect(find.text('略有波动'), findsOneWidget);
     expect(find.byTooltip('新手指引'), findsOneWidget);
     expect(find.byTooltip('个人中心'), findsOneWidget);
     expect(find.text('恢复建议'), findsOneWidget);
@@ -132,18 +147,21 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('100'), findsOneWidget);
-    expect(find.text('需要恢复'), findsOneWidget);
+    expect(find.text('明显紧绷'), findsOneWidget);
     expect(find.textContaining('测试数据 · 压力偏高'), findsOneWidget);
 
     await tester.tap(find.text('使用测试数据'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
-    await tester.tap(find.text('需要恢复').last);
+    final recoverySample = find.text('需要恢复').last;
+    await tester.ensureVisible(recoverySample);
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(recoverySample);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('100'), findsOneWidget);
-    expect(find.text('需要恢复'), findsOneWidget);
+    expect(find.text('明显紧绷'), findsOneWidget);
     expect(find.textContaining('测试数据 · 需要恢复'), findsOneWidget);
   });
 
@@ -170,6 +188,34 @@ void main() {
     expect(find.text('花时来信已收好。'), findsOneWidget);
   });
 
+  testWidgets('flower reminder can schedule a garden check-in', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: FlowerReminderPage()));
+
+    expect(find.text('提醒我选一朵花'), findsOneWidget);
+    final gardenSwitch = find.byType(Switch).first;
+    await tester.ensureVisible(gardenSwitch);
+    await tester.pump();
+    await tester.tap(gardenSwitch);
+    await tester.pump();
+    await tester.scrollUntilVisible(
+      find.text('保存提醒'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.text('保存提醒'));
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, 150));
+    await tester.pump();
+    await tester.tap(find.text('保存提醒'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final prefs = await SharedPreferences.getInstance();
+    final stored = jsonDecode(prefs.getString('flower_reminders')!) as List;
+    expect((stored.first as Map)['opensGarden'], isTrue);
+    expect((stored.first as Map)['event'], '选一朵今日心情花');
+    expect((stored.first as Map)['hour'], 21);
+  });
+
   testWidgets('flower reminder reference table is grouped and collapsible', (
     tester,
   ) async {
@@ -193,6 +239,208 @@ void main() {
     expect(find.text('喝水'), findsWidgets);
     expect(find.text('该喝口水啦。你比任何一朵花，都更需要水的滋养。'), findsOneWidget);
     expect(find.text('喝点水吧。身体里的每片叶子都在等这口水。'), findsOneWidget);
+  });
+
+  testWidgets(
+    'flower reminder explains scheduled and stress-triggered letters',
+    (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: FlowerReminderPage()));
+
+      await tester.scrollUntilVisible(
+        find.text('来信会怎样抵达'),
+        350,
+        scrollable: find.byType(Scrollable).first,
+      );
+
+      expect(find.text('你种下的提醒'), findsOneWidget);
+      expect(find.text('身体状态的来信'), findsOneWidget);
+      expect(find.textContaining('压力状态出现明显变化'), findsOneWidget);
+    },
+  );
+
+  testWidgets('lighthouse can draft a letter from recent garden history', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'garden_selection_history': jsonEncode([
+        {
+          'id': 'garden-record-1',
+          'flowerName': '铃兰',
+          'mood': '低落',
+          'meaning': '想哭就哭吧。',
+          'message': '灯塔先陪你安静一会儿。',
+          'createdAt': '2026-05-29T09:30:00.000',
+        },
+      ]),
+    });
+    await tester.pumpWidget(const MaterialApp(home: FlowerReminderPage()));
+
+    await tester.tap(find.text('灯塔帮我写'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('灯塔写了三封短信'), findsOneWidget);
+    expect(find.textContaining('铃兰'), findsWidgets);
+  });
+
+  testWidgets('opening and responding to a flower letter updates its status', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'flower_reminders': jsonEncode([
+        {
+          'id': 'letter-1',
+          'event': '给未来的我',
+          'category': '情绪赋能',
+          'subcategory': '自我肯定',
+          'message': '今天也可以慢慢来。',
+          'frequency': '仅一次',
+          'weekdays': <int>[],
+          'hour': 9,
+          'minute': 0,
+          'createdAt': '2026-05-29T09:30:00.000',
+          'source': 'garden',
+          'flowerName': '铃兰',
+          'mood': '低落',
+        },
+      ]),
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: FlowerLetterReceiptPage(reminderId: 'letter-1')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('今天也可以慢慢来。'), findsOneWidget);
+    expect(find.text('记录此刻心情'), findsOneWidget);
+    expect(find.text('和灯塔聊聊'), findsOneWidget);
+
+    await tester.tap(find.text('和灯塔聊聊'));
+    await tester.pumpAndSettle();
+    expect(find.text('灯塔对话'), findsOneWidget);
+    expect(find.textContaining('我收到了一封花时来信'), findsOneWidget);
+
+    final prefs = await SharedPreferences.getInstance();
+    final stored = jsonDecode(prefs.getString('flower_reminders')!) as List;
+    expect((stored.first as Map)['deliveredAt'], isNotNull);
+    expect((stored.first as Map)['respondedAt'], isNotNull);
+  });
+
+  testWidgets('legacy daily reminder uses the new receipt actions', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'flower_reminders': jsonEncode([
+        {
+          'id': 'legacy-reminder-1',
+          'event': '喝水',
+          'category': '生活小事',
+          'subcategory': '喝水',
+          'message': '喝口水，让身体慢慢舒展开。',
+          'frequency': '每天',
+          'weekdays': <int>[],
+          'hour': 9,
+          'minute': 0,
+          'createdAt': '2026-05-29T09:30:00.000',
+        },
+      ]),
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: FlowerLetterReceiptPage(reminderId: 'legacy-reminder-1'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('喝水提醒到了'), findsOneWidget);
+    expect(find.text('日常提醒 · 每天'), findsOneWidget);
+    expect(find.text('我完成了'), findsOneWidget);
+    expect(find.text('10 分钟后再提醒'), findsOneWidget);
+    expect(find.text('记录此刻心情'), findsOneWidget);
+    expect(find.text('和灯塔聊聊'), findsOneWidget);
+
+    await tester.tap(find.text('我完成了'));
+    await tester.pump();
+    expect(find.text('收到，灯塔替你记下了。'), findsOneWidget);
+
+    final prefs = await SharedPreferences.getInstance();
+    final stored = jsonDecode(prefs.getString('flower_reminders')!) as List;
+    expect((stored.first as Map)['source'], 'reminder');
+    expect((stored.first as Map)['deliveredAt'], isNotNull);
+    expect((stored.first as Map)['respondedAt'], isNotNull);
+  });
+
+  testWidgets('stress-triggered letter opens its recovery advice', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'flower_reminders': jsonEncode([
+        {
+          'id': 'stress-letter-1',
+          'event': '轻微紧绷 → 需要恢复',
+          'category': '身体状态',
+          'subcategory': '需要恢复',
+          'message': '当前压力 82% · 身体正在提醒你先停一下。',
+          'frequency': '仅一次',
+          'weekdays': <int>[],
+          'hour': 15,
+          'minute': 0,
+          'createdAt': '2026-08-29T15:00:00.000',
+          'source': 'stress',
+          'stressValue': 82,
+          'stressTransitionMessage': '身体正在提醒你先停一下。',
+        },
+      ]),
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: FlowerLetterReceiptPage(reminderId: 'stress-letter-1'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('身体状态发生了变化'), findsOneWidget);
+    expect(find.text('身体状态 · 仅一次'), findsOneWidget);
+    expect(find.text('查看此刻的恢复建议'), findsOneWidget);
+
+    await tester.tap(find.text('查看此刻的恢复建议'));
+    await tester.pumpAndSettle();
+    expect(find.text('当前压力值 82'), findsOneWidget);
+    expect(find.text('恢复建议'), findsWidgets);
+  });
+
+  testWidgets('conversation draft is saved only after user confirmation', (
+    tester,
+  ) async {
+    final scheduledAt = DateTime.now().add(const Duration(days: 1));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeepSeekChatPage(
+          initialReminderDraft: FlowerLetterDraft(
+            event: '交报告',
+            message: '报告时间快到了，先从眼前最小的一步开始。',
+            scheduledAt: scheduledAt,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('要让灯塔在那个时候'), findsOneWidget);
+    expect(find.text('收下这封信'), findsOneWidget);
+    expect(find.text('改一改'), findsOneWidget);
+    expect(find.text('不用了'), findsOneWidget);
+
+    await tester.tap(find.text('收下这封信'));
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    final stored = jsonDecode(prefs.getString('flower_reminders')!) as List;
+    expect(stored, hasLength(1));
+    expect((stored.first as Map)['source'], 'chat');
+    expect((stored.first as Map)['scheduledAt'], isNotNull);
+    expect(find.textContaining('这封来信已'), findsOneWidget);
   });
 
   testWidgets('garden page shows flower selection history', (tester) async {
@@ -227,6 +475,37 @@ void main() {
     expect(find.text('选择历史'), findsOneWidget);
     expect(find.text('灯塔回信'), findsOneWidget);
     expect(find.text('灯塔把这朵铃兰放在窗边，先陪你安静一会儿。'), findsWidgets);
+  });
+
+  testWidgets('garden can send the latest flower to a future self', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({
+      'selected_garden_flower_name': '铃兰',
+      'garden_selection_history': jsonEncode([
+        {
+          'id': 'garden-record-1',
+          'flowerName': '铃兰',
+          'mood': '低落',
+          'meaning': '想哭就哭吧。',
+          'message': '灯塔先陪你安静一会儿。',
+          'createdAt': '2026-05-29T09:30:00.000',
+        },
+      ]),
+    });
+
+    await tester.pumpWidget(const MaterialApp(home: MyGardenPage()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('把这朵花寄给未来的我'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('花时来信'), findsOneWidget);
+    expect(find.text('灯塔先陪你安静一会儿。'), findsOneWidget);
+    expect(find.text('一次'), findsOneWidget);
   });
 
   testWidgets('garden reply opens lighthouse chat with flower context', (
@@ -394,6 +673,33 @@ void main() {
 
     expect(find.text('新手问题'), findsWidgets);
     expect(find.text('先让 MoodLand 认识一下你。'), findsOneWidget);
+  });
+
+  testWidgets('user page opens HRV baseline settings with recommendation', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'new_user_questions_completed': true,
+      'recommended_hrv_baseline': 62.0,
+      'recommended_hrv_sample_count': 20,
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: UserHomePage(currentEstimate: null)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(ListView), const Offset(0, -700));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('HRV 基线'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('HRV 基线'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('推荐 HRV 基线值'), findsOneWidget);
+    expect(find.text('62.0 ms'), findsOneWidget);
+    expect(find.text('自动'), findsOneWidget);
+    expect(find.text('自定义'), findsOneWidget);
   });
 
   testWidgets('deepseek chat page starts a new conversation', (tester) async {

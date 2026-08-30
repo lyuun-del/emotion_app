@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -13,6 +14,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
+import 'stress_algorithm_v2.dart';
+
 const _lighthouseAvatarAsset = 'assets/images/lighthouse_lamp_avatar.png';
 const _lighthouseAvatarPathKey = 'lighthouse_assistant_avatar_path';
 const _userAvatarPathKey = 'user_avatar_path';
@@ -21,11 +24,19 @@ const _userBioKey = 'user_bio';
 const _userBirthdayKey = 'user_birthday';
 const _testHealthDataEnabledKey = 'test_health_data_enabled';
 const _useHrvForStressKey = 'use_hrv_for_stress';
+const _recommendedHrvBaselineKey = 'recommended_hrv_baseline';
+const _recommendedHrvSampleCountKey = 'recommended_hrv_sample_count';
+const _customHrvBaselineKey = 'custom_hrv_baseline';
 const _manualHealthEntriesKey = 'manual_health_entries';
 const _flowerReminderStorageKey = 'flower_reminders';
 const _flowerQuietStartMinutesKey = 'flower_quiet_start_minutes';
 const _flowerQuietEndMinutesKey = 'flower_quiet_end_minutes';
+const _lastStressNotificationZoneKey = 'last_stress_notification_zone';
+const _lastStressNotificationMessageKey = 'last_stress_notification_message';
+const _lastStressNotificationTimeKey = 'last_stress_notification_time';
+const _legacyStressNotificationPayload = 'open-lighthouse-stress';
 const _appIconChannel = MethodChannel('moodland/app_icon');
+const _watchSyncChannel = MethodChannel('moodland/watch_sync');
 const _homeDeepSeekApiKey = String.fromEnvironment('AI_WORKER_TOKEN');
 
 const _homeDeepSeekModel = String.fromEnvironment(
@@ -37,6 +48,195 @@ const _homeDeepSeekApiUrl = String.fromEnvironment(
   'AI_WORKER_URL',
   defaultValue: 'https://ai.moodland.space',
 );
+
+final _rootNavigatorKey = GlobalKey<NavigatorState>();
+_StressNotificationNavigationData? _pendingStressNotificationNavigation;
+_FlowerLetterNavigationData? _pendingFlowerLetterNavigation;
+
+class _StressNotificationNavigationData {
+  const _StressNotificationNavigationData({
+    required this.stressValue,
+    required this.transitionMessage,
+  });
+
+  final int stressValue;
+  final String transitionMessage;
+
+  String toPayload() => jsonEncode({
+    'type': 'stress-recovery',
+    'stressValue': stressValue,
+    'transitionMessage': transitionMessage,
+  });
+
+  static _StressNotificationNavigationData? fromPayload(String? payload) {
+    if (payload == null || payload.isEmpty) {
+      return null;
+    }
+    if (payload == _legacyStressNotificationPayload) {
+      return const _StressNotificationNavigationData(
+        stressValue: 38,
+        transitionMessage: '压力状态发生了变化，先看看此刻适合你的恢复建议。',
+      );
+    }
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map || decoded['type'] != 'stress-recovery') {
+        return null;
+      }
+      final stressValue = decoded['stressValue'];
+      final transitionMessage = decoded['transitionMessage'];
+      if (stressValue is! num || transitionMessage is! String) {
+        return null;
+      }
+      return _StressNotificationNavigationData(
+        stressValue: stressValue.round().clamp(0, 100),
+        transitionMessage: transitionMessage,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+class _FlowerLetterNavigationData {
+  const _FlowerLetterNavigationData({required this.reminderId});
+
+  final String reminderId;
+
+  String toPayload() =>
+      jsonEncode({'type': 'flower-letter', 'reminderId': reminderId});
+
+  static _FlowerLetterNavigationData? fromPayload(String? payload) {
+    if (payload == null || payload.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map || decoded['type'] != 'flower-letter') return null;
+      final reminderId = decoded['reminderId'];
+      if (reminderId is! String || reminderId.isEmpty) return null;
+      return _FlowerLetterNavigationData(reminderId: reminderId);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+void _openRecoveryAdviceFromStressNotification(
+  _StressNotificationNavigationData data,
+) {
+  final navigator = _rootNavigatorKey.currentState;
+  if (navigator == null) {
+    _pendingStressNotificationNavigation = data;
+    return;
+  }
+  _pendingStressNotificationNavigation = null;
+  navigator.push(
+    MaterialPageRoute<void>(
+      builder: (context) => NotificationRecoveryAdvicePage(
+        stressValue: data.stressValue,
+        transitionMessage: data.transitionMessage,
+      ),
+    ),
+  );
+}
+
+void _openFlowerLetterFromNotification(_FlowerLetterNavigationData data) {
+  final navigator = _rootNavigatorKey.currentState;
+  if (navigator == null) {
+    _pendingFlowerLetterNavigation = data;
+    return;
+  }
+  _pendingFlowerLetterNavigation = null;
+  navigator.push(
+    MaterialPageRoute<void>(
+      builder: (context) =>
+          FlowerLetterReceiptPage(reminderId: data.reminderId),
+    ),
+  );
+}
+
+class _HrvBaselineConfiguration {
+  const _HrvBaselineConfiguration({
+    required this.recommendedBaseline,
+    required this.validSampleCount,
+    required this.customBaseline,
+  });
+
+  static const defaultBaseline = 50.0;
+  static const requiredSampleCount = 20;
+
+  final double? recommendedBaseline;
+  final int validSampleCount;
+  final double? customBaseline;
+
+  bool get isCustom => customBaseline != null;
+
+  bool get hasEnoughPersonalData =>
+      validSampleCount >= requiredSampleCount && recommendedBaseline != null;
+
+  int get remainingSampleCount =>
+      (requiredSampleCount - validSampleCount).clamp(0, requiredSampleCount);
+
+  double get effectiveBaseline {
+    final custom = customBaseline;
+    if (custom != null) {
+      return custom;
+    }
+    final recommended = recommendedBaseline;
+    if (hasEnoughPersonalData && recommended != null) {
+      return recommended;
+    }
+    return defaultBaseline;
+  }
+}
+
+class _HrvBaselineManager {
+  const _HrvBaselineManager._();
+
+  static bool _isValid(double? value) =>
+      value != null && value >= 10 && value <= 200;
+
+  static Future<_HrvBaselineConfiguration> load({
+    double? recommendedBaseline,
+    int? validSampleCount,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final previousRecommended = prefs.getDouble(_recommendedHrvBaselineKey);
+    final previousSampleCount =
+        prefs.getInt(_recommendedHrvSampleCountKey) ?? 0;
+    final shouldUpdateRecommendation =
+        _isValid(recommendedBaseline) &&
+        (previousRecommended == null ||
+            validSampleCount == null ||
+            validSampleCount >= _HrvBaselineConfiguration.requiredSampleCount ||
+            validSampleCount >= previousSampleCount);
+    if (shouldUpdateRecommendation) {
+      await prefs.setDouble(_recommendedHrvBaselineKey, recommendedBaseline!);
+    }
+    if (validSampleCount != null && validSampleCount > previousSampleCount) {
+      await prefs.setInt(_recommendedHrvSampleCountKey, validSampleCount);
+    }
+    final savedRecommended = prefs.getDouble(_recommendedHrvBaselineKey);
+    final savedSampleCount = prefs.getInt(_recommendedHrvSampleCountKey) ?? 0;
+    final savedCustom = prefs.getDouble(_customHrvBaselineKey);
+    return _HrvBaselineConfiguration(
+      recommendedBaseline: _isValid(savedRecommended) ? savedRecommended : null,
+      validSampleCount: savedSampleCount,
+      customBaseline: _isValid(savedCustom) ? savedCustom : null,
+    );
+  }
+
+  static Future<void> setCustomBaseline(double? value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (value == null) {
+      await prefs.remove(_customHrvBaselineKey);
+      return;
+    }
+    if (!_isValid(value)) {
+      throw const FormatException('HRV 基线应在 10–200ms 之间');
+    }
+    await prefs.setDouble(_customHrvBaselineKey, value);
+  }
+}
 
 class AppIconSwitcher {
   const AppIconSwitcher._();
@@ -58,10 +258,113 @@ class AppIconSwitcher {
   }
 }
 
+Future<void> _syncHealthEstimateToWatch(HealthStressEstimate estimate) async {
+  if (!Platform.isIOS) {
+    return;
+  }
+
+  Map<String, Object> encodePoint(HealthChartPoint point) => {
+    'timestamp': point.time.millisecondsSinceEpoch / 1000,
+    'value': point.value,
+  };
+
+  List<Map<String, Object>> encodeSamples(List<HealthChartPoint> samples) {
+    const maximumCount = 120;
+    if (samples.length <= maximumCount) {
+      return samples.map(encodePoint).toList();
+    }
+    final step = (samples.length - 1) / (maximumCount - 1);
+    return [
+      for (var index = 0; index < maximumCount; index++)
+        encodePoint(samples[(index * step).round()]),
+    ];
+  }
+
+  final latestHeartRate = estimate.stats.heartRateSamples.isEmpty
+      ? null
+      : estimate.stats.heartRateSamples.last;
+  final latestHrv = estimate.stats.hrvSamples.isEmpty
+      ? null
+      : estimate.stats.hrvSamples.last;
+  final latestSleep = estimate.stats.sleepSamples.isEmpty
+      ? null
+      : estimate.stats.sleepSamples.last;
+  final latestSteps = estimate.stats.stepSamples.isEmpty
+      ? null
+      : estimate.stats.stepSamples.last;
+  final updatedAt =
+      [
+        latestHeartRate?.time,
+        latestHrv?.time,
+        latestSleep?.time,
+        latestSteps?.time,
+      ].whereType<DateTime>().fold<DateTime?>(null, (latest, value) {
+        return latest == null || value.isAfter(latest) ? value : latest;
+      });
+  final baselineConfiguration = await _HrvBaselineManager.load();
+
+  try {
+    await _watchSyncChannel.invokeMethod<void>('syncHealthData', {
+      'source': 'iphone',
+      'updatedAt': (updatedAt ?? DateTime.now()).millisecondsSinceEpoch / 1000,
+      'stress': estimate.stressValue,
+      'stressConfidence': estimate.confidence,
+      'stressMode': estimate.mode.name,
+      'isActivityFiltered': estimate.isActivityFiltered,
+      if (latestHeartRate != null) ...{
+        'heartRate': latestHeartRate.value,
+        'heartRateMeasuredAt':
+            latestHeartRate.time.millisecondsSinceEpoch / 1000,
+      } else if (estimate.stats.averageHeartRate != null)
+        'heartRate': estimate.stats.averageHeartRate,
+      if (latestHrv != null) ...{
+        'hrv': latestHrv.value,
+        'hrvMeasuredAt': latestHrv.time.millisecondsSinceEpoch / 1000,
+      } else if (estimate.stats.averageHrv != null)
+        'hrv': estimate.stats.averageHrv,
+      if (estimate.stats.averageRestingHeartRate != null)
+        'heartRateBaseline': estimate.stats.averageRestingHeartRate,
+      if (estimate.stats.sleepMinutes > 0) ...{
+        'sleepMinutes': estimate.stats.sleepMinutes,
+        if (latestSleep != null)
+          'sleepMeasuredAt': latestSleep.time.millisecondsSinceEpoch / 1000,
+      },
+      if (estimate.stats.steps > 0) ...{
+        'steps': estimate.stats.steps,
+        if (latestSteps != null)
+          'stepsMeasuredAt': latestSteps.time.millisecondsSinceEpoch / 1000,
+      },
+      if (estimate.hrvBaseline != null) 'hrvBaseline': estimate.hrvBaseline,
+      if (baselineConfiguration.recommendedBaseline != null)
+        'hrvBaselineRecommendation': baselineConfiguration.recommendedBaseline,
+      'hrvBaselineSampleCount': baselineConfiguration.validSampleCount,
+      'heartRateSamples': encodeSamples(estimate.stats.heartRateSamples),
+      'hrvSamples': encodeSamples(estimate.stats.hrvSamples),
+      'sleepSamples': encodeSamples(estimate.stats.sleepSamples),
+      'stepSamples': encodeSamples(estimate.stats.stepSamples),
+      'stressSamples': encodeSamples(estimate.stats.stressSamples),
+    });
+  } on MissingPluginException {
+    // Watch sync is available only in the iOS host app.
+  } on PlatformException {
+    // Health sync should still succeed when the paired Watch is unavailable.
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _FlowerNotificationService.initialize();
   runApp(const MoodStressApp());
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final pendingNavigation = _pendingStressNotificationNavigation;
+    if (pendingNavigation != null) {
+      _openRecoveryAdviceFromStressNotification(pendingNavigation);
+    }
+    final pendingFlowerLetter = _pendingFlowerLetterNavigation;
+    if (pendingFlowerLetter != null) {
+      _openFlowerLetterFromNotification(pendingFlowerLetter);
+    }
+  });
 }
 
 class MoodStressApp extends StatelessWidget {
@@ -72,6 +375,7 @@ class MoodStressApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _rootNavigatorKey,
       title: 'MoodLand',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -116,12 +420,18 @@ class _StressHomePageState extends State<StressHomePage>
   String? _healthSyncSummary;
   String? _aiSupportSuggestion;
   HealthStressEstimate? _latestHealthEstimate;
+  Map<String, dynamic>? _latestWatchHealthPayload;
   TimeOfDay _dayStartTime = const TimeOfDay(hour: 7, minute: 0);
   TimeOfDay _nightStartTime = const TimeOfDay(hour: 22, minute: 0);
   Timer? _autoSwitchTimer;
   int? _homeGuideStep;
   int _supportSuggestionRequestId = 0;
   int _userProfileRefreshToken = 0;
+  DateTime? _lastAutomaticHealthRefreshAt;
+
+  static const _automaticHealthRefreshCooldown = Duration(minutes: 1);
+
+  bool get _supportsHealthAutoRefresh => Platform.isIOS || Platform.isAndroid;
 
   StressProfile get _profile => StressProfile.fromValue(_stressValue);
   bool get _isShowingHomeGuide => _homeGuideStep != null;
@@ -166,11 +476,18 @@ class _StressHomePageState extends State<StressHomePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (Platform.isIOS) {
+      _watchSyncChannel.setMethodCallHandler(_handleWatchSyncMethod);
+      unawaited(_loadLatestWatchHealthData());
+    }
     _loadAutoSwitchSettings();
     _loadTestHealthDataSetting();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showFirstLaunchGuideIfNeeded();
       _refreshAiSupportSuggestion();
+      if (_supportsHealthAutoRefresh) {
+        unawaited(_refreshHealthOnForegroundIfNeeded(force: true));
+      }
     });
   }
 
@@ -187,15 +504,393 @@ class _StressHomePageState extends State<StressHomePage>
   @override
   void dispose() {
     _autoSwitchTimer?.cancel();
+    if (Platform.isIOS) {
+      _watchSyncChannel.setMethodCallHandler(null);
+    }
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _autoSwitchEnabled) {
-      _syncAutoSwitchWithSystemTime();
+    if (state == AppLifecycleState.resumed) {
+      if (Platform.isIOS) {
+        unawaited(_loadLatestWatchHealthData());
+      }
+      if (_supportsHealthAutoRefresh) {
+        unawaited(_refreshHealthOnForegroundIfNeeded());
+      }
+      if (_autoSwitchEnabled) {
+        _syncAutoSwitchWithSystemTime();
+      }
     }
+  }
+
+  Future<dynamic> _handleWatchSyncMethod(MethodCall call) async {
+    switch (call.method) {
+      case 'watchHealthDataUpdated':
+        if (call.arguments is! Map) {
+          return false;
+        }
+        final payload = Map<String, dynamic>.from(call.arguments as Map);
+        _applyWatchHealthPayload(payload);
+        return true;
+      case 'backgroundHealthRefreshRequested':
+        return _syncHealthStress(showResult: false);
+      default:
+        return null;
+    }
+  }
+
+  Future<void> _refreshHealthOnForegroundIfNeeded({bool force = false}) async {
+    final now = DateTime.now();
+    final previousRefresh = _lastAutomaticHealthRefreshAt;
+    if (!force &&
+        previousRefresh != null &&
+        now.difference(previousRefresh) < _automaticHealthRefreshCooldown) {
+      return;
+    }
+    _lastAutomaticHealthRefreshAt = now;
+    await _syncHealthStress(showResult: false);
+  }
+
+  Future<void> _loadLatestWatchHealthData() async {
+    try {
+      final payload = await _watchSyncChannel.invokeMapMethod<String, dynamic>(
+        'getLatestWatchHealthData',
+      );
+      if (payload != null && payload.isNotEmpty) {
+        _applyWatchHealthPayload(payload);
+      }
+    } on MissingPluginException {
+      // The channel exists only in the iOS host application.
+    } on PlatformException {
+      // Keep the last in-memory data when WatchConnectivity is unavailable.
+    }
+  }
+
+  void _applyWatchHealthPayload(Map<String, dynamic> payload) {
+    if (payload['mockDisabled'] == true) {
+      _latestWatchHealthPayload = null;
+      if (mounted) {
+        setState(() {
+          _latestHealthEstimate = null;
+          _healthSyncSummary = 'Watch 测试数据已关闭，正在恢复真实数据...';
+          _aiSupportSuggestion = null;
+        });
+        unawaited(_syncHealthStress());
+      }
+      return;
+    }
+    unawaited(_ingestWatchHrvBaseline(payload));
+    _latestWatchHealthPayload = payload;
+    if (!mounted) {
+      return;
+    }
+    final merged = _mergeWatchAndPhoneHealth(
+      phoneEstimate: _latestHealthEstimate,
+      watchPayload: payload,
+    );
+    setState(() {
+      _latestHealthEstimate = merged;
+      _stressValue = merged.stressValue;
+      _healthSyncSummary = merged.summary;
+      _aiSupportSuggestion = null;
+    });
+    unawaited(_FlowerNotificationService.handleStressValue(merged.stressValue));
+    unawaited(_refreshAiSupportSuggestion());
+  }
+
+  Future<void> _ingestWatchHrvBaseline(Map<String, dynamic> payload) async {
+    final recommendation = _payloadDouble(payload['hrvBaselineRecommendation']);
+    final sampleCount = _payloadDouble(
+      payload['hrvBaselineSampleCount'],
+    )?.round();
+    if (recommendation == null || sampleCount == null) {
+      return;
+    }
+    await _HrvBaselineManager.load(
+      recommendedBaseline: recommendation,
+      validSampleCount: sampleCount,
+    );
+  }
+
+  HealthStressEstimate _mergeWatchAndPhoneHealth({
+    required HealthStressEstimate? phoneEstimate,
+    required Map<String, dynamic> watchPayload,
+  }) {
+    final phoneStats = phoneEstimate?.stats;
+    final watchHeartRateSamples = _decodeWatchSamples(
+      watchPayload['heartRateSamples'],
+    );
+    final watchHrvSamples = _decodeWatchSamples(watchPayload['hrvSamples']);
+    final watchSleepSamples = _decodeWatchSamples(watchPayload['sleepSamples']);
+    final watchStepSamples = _decodeWatchSamples(watchPayload['stepSamples']);
+    final watchStressSamples = _decodeWatchSamples(
+      watchPayload['stressSamples'],
+    );
+    final phoneHeartRateSamples = phoneStats?.heartRateSamples ?? const [];
+    final phoneHrvSamples = phoneStats?.hrvSamples ?? const [];
+    final phoneSleepSamples = phoneStats?.sleepSamples ?? const [];
+    final phoneStepSamples = phoneStats?.stepSamples ?? const [];
+
+    final watchHeartRate =
+        _payloadDouble(watchPayload['heartRate']) ??
+        (watchHeartRateSamples.isEmpty
+            ? null
+            : watchHeartRateSamples.last.value);
+    final watchHrv =
+        _payloadDouble(watchPayload['hrv']) ??
+        (watchHrvSamples.isEmpty ? null : watchHrvSamples.last.value);
+    final watchSleepMinutes =
+        _payloadDouble(watchPayload['sleepMinutes']) ??
+        (watchSleepSamples.isEmpty ? null : watchSleepSamples.last.value);
+    final watchSteps =
+        _payloadDouble(watchPayload['steps']) ??
+        (watchStepSamples.isEmpty ? null : watchStepSamples.last.value);
+    final phoneHeartRate = phoneHeartRateSamples.isNotEmpty
+        ? phoneHeartRateSamples.last.value
+        : phoneStats?.averageHeartRate;
+    final phoneHrv = phoneHrvSamples.isNotEmpty
+        ? phoneHrvSamples.last.value
+        : phoneStats?.averageHrv;
+    final phoneSleepMinutes = phoneSleepSamples.isEmpty
+        ? null
+        : phoneStats?.sleepMinutes;
+    final phoneSteps = phoneStepSamples.isEmpty ? null : phoneStats?.steps;
+
+    final watchHeartRateTime =
+        _payloadDate(watchPayload['heartRateMeasuredAt']) ??
+        (watchHeartRateSamples.isEmpty
+            ? _payloadDate(watchPayload['updatedAt'])
+            : watchHeartRateSamples.last.time);
+    final watchHrvTime =
+        _payloadDate(watchPayload['hrvMeasuredAt']) ??
+        (watchHrvSamples.isEmpty
+            ? _payloadDate(watchPayload['updatedAt'])
+            : watchHrvSamples.last.time);
+    final watchSleepTime =
+        _payloadDate(watchPayload['sleepMeasuredAt']) ??
+        (watchSleepSamples.isEmpty
+            ? _payloadDate(watchPayload['updatedAt'])
+            : watchSleepSamples.last.time);
+    final watchStepsTime =
+        _payloadDate(watchPayload['stepsMeasuredAt']) ??
+        (watchStepSamples.isEmpty
+            ? _payloadDate(watchPayload['updatedAt'])
+            : watchStepSamples.last.time);
+    final phoneHeartRateTime = phoneHeartRateSamples.isEmpty
+        ? null
+        : phoneHeartRateSamples.last.time;
+    final phoneHrvTime = phoneHrvSamples.isEmpty
+        ? null
+        : phoneHrvSamples.last.time;
+    final phoneSleepTime = phoneSleepSamples.isEmpty
+        ? null
+        : phoneSleepSamples.last.time;
+    final phoneStepsTime = phoneStepSamples.isEmpty
+        ? null
+        : phoneStepSamples.last.time;
+
+    final usePhoneHeartRate = _phoneMetricOverridesWatch(
+      phoneValue: phoneHeartRate,
+      phoneTime: phoneHeartRateTime,
+      watchValue: watchHeartRate,
+      watchTime: watchHeartRateTime,
+    );
+    final usePhoneHrv = _phoneMetricOverridesWatch(
+      phoneValue: phoneHrv,
+      phoneTime: phoneHrvTime,
+      watchValue: watchHrv,
+      watchTime: watchHrvTime,
+    );
+    final usePhoneSleep = _phoneMetricOverridesWatch(
+      phoneValue: phoneSleepMinutes,
+      phoneTime: phoneSleepTime,
+      watchValue: watchSleepMinutes,
+      watchTime: watchSleepTime,
+    );
+    final usePhoneSteps = _phoneMetricOverridesWatch(
+      phoneValue: phoneSteps,
+      phoneTime: phoneStepsTime,
+      watchValue: watchSteps,
+      watchTime: watchStepsTime,
+    );
+    final resolvedHeartRate = usePhoneHeartRate
+        ? phoneHeartRate
+        : (watchHeartRate ?? phoneHeartRate);
+    final resolvedHrv = usePhoneHrv ? phoneHrv : (watchHrv ?? phoneHrv);
+    final resolvedSleepMinutes = usePhoneSleep
+        ? phoneSleepMinutes
+        : (watchSleepMinutes ?? phoneSleepMinutes);
+    final resolvedSteps = usePhoneSteps
+        ? phoneSteps
+        : (watchSteps ?? phoneSteps);
+    final mergedHeartRateSamples = _mergeHealthSamples(
+      phoneHeartRateSamples,
+      watchHeartRateSamples,
+    );
+    final mergedHrvSamples = _mergeHealthSamples(
+      phoneHrvSamples,
+      watchHrvSamples,
+    );
+    final mergedSleepSamples = usePhoneSleep || watchSleepSamples.isEmpty
+        ? phoneSleepSamples
+        : watchSleepSamples;
+    final mergedStepSamples = usePhoneSteps || watchStepSamples.isEmpty
+        ? phoneStepSamples
+        : watchStepSamples;
+
+    final watchStress = _payloadDouble(watchPayload['stress']);
+    final watchActivityFiltered = watchPayload['isActivityFiltered'] == true;
+    final watchConfidence = _payloadDouble(
+      watchPayload['stressConfidence'],
+    )?.round();
+    final usesWatchMeasurement =
+        (!usePhoneHeartRate && watchHeartRate != null) ||
+        (!usePhoneHrv && watchHrv != null);
+    final usesWatchHealthData =
+        usesWatchMeasurement ||
+        (!usePhoneSleep && watchSleepMinutes != null) ||
+        (!usePhoneSteps && watchSteps != null);
+    final resolvedStress = usesWatchMeasurement && watchStress != null
+        ? watchStress.clamp(0, 100).toDouble()
+        : (phoneEstimate?.stressValue ?? watchStress ?? _stressValue)
+              .clamp(0, 100)
+              .toDouble();
+    final stressSamples =
+        _mergeHealthSamples(phoneStats?.stressSamples ?? const [], [
+          ...watchStressSamples,
+          if (usesWatchMeasurement && watchStress != null)
+            HealthChartPoint(
+              _payloadDate(watchPayload['updatedAt']) ?? DateTime.now(),
+              watchStress,
+            ),
+        ]);
+
+    final stats = HealthStressStats(
+      averageHeartRate: resolvedHeartRate,
+      averageRestingHeartRate:
+          phoneStats?.averageRestingHeartRate ??
+          _payloadDouble(watchPayload['heartRateBaseline']),
+      averageHrv: resolvedHrv,
+      steps: resolvedSteps ?? 0,
+      sleepMinutes: resolvedSleepMinutes ?? 0,
+      heartRateSamples: mergedHeartRateSamples,
+      restingHeartRateSamples: phoneStats?.restingHeartRateSamples ?? const [],
+      hrvSamples: mergedHrvSamples,
+      sleepSamples: mergedSleepSamples,
+      stepSamples: mergedStepSamples,
+      rawStepSamples: phoneStats?.rawStepSamples ?? const [],
+      bodyTemperatureSamples: phoneStats?.bodyTemperatureSamples ?? const [],
+      stressSamples: stressSamples,
+    );
+    final sourceText = usesWatchHealthData
+        ? (watchPayload['isMockData'] == true
+              ? 'Apple Watch 测试数据'
+              : 'Apple Watch 数据优先')
+        : 'iPhone 数据比 Watch 至少晚 5 分钟';
+    final supplementText =
+        (watchHeartRate == null && phoneHeartRate != null) ||
+            (watchHrv == null && phoneHrv != null) ||
+            (watchSleepMinutes == null && phoneSleepMinutes != null) ||
+            (watchSteps == null && phoneSteps != null)
+        ? '，缺失项已由 iPhone 补充'
+        : '';
+    return HealthStressEstimate(
+      stressValue: resolvedStress,
+      summary: '$sourceText$supplementText · ${stats.summary}',
+      stats: stats,
+      hrvBaseline:
+          phoneEstimate?.hrvBaseline ??
+          _payloadDouble(watchPayload['hrvBaseline']),
+      confidence: usesWatchMeasurement
+          ? (watchConfidence ?? 0).clamp(0, 100)
+          : (phoneEstimate?.confidence ?? watchConfidence ?? 0).clamp(0, 100),
+      mode: usesWatchMeasurement
+          ? (watchPayload['stressMode'] == StressDataMode.fullHrv.name
+                ? StressDataMode.fullHrv
+                : StressDataMode.noHrv)
+          : (phoneEstimate?.mode ?? StressDataMode.noHrv),
+      level: stressLevelFor(resolvedStress.round()),
+      isActivityFiltered: usesWatchMeasurement
+          ? watchActivityFiltered
+          : (phoneEstimate?.isActivityFiltered ?? watchActivityFiltered),
+      reason: usesWatchMeasurement && watchActivityFiltered
+          ? '活动中，暂不判断压力状态'
+          : phoneEstimate?.reason,
+    );
+  }
+
+  bool _phoneMetricOverridesWatch({
+    required double? phoneValue,
+    required DateTime? phoneTime,
+    required double? watchValue,
+    required DateTime? watchTime,
+  }) {
+    if (phoneValue == null) {
+      return false;
+    }
+    if (watchValue == null) {
+      return true;
+    }
+    if (phoneTime == null || watchTime == null) {
+      return false;
+    }
+    return phoneTime.difference(watchTime) >= const Duration(minutes: 5);
+  }
+
+  List<HealthChartPoint> _decodeWatchSamples(Object? raw) {
+    if (raw is! List) {
+      return const [];
+    }
+    final samples = <HealthChartPoint>[];
+    for (final item in raw) {
+      if (item is! Map) {
+        continue;
+      }
+      final timestamp = _payloadDouble(item['timestamp']);
+      final value = _payloadDouble(item['value']);
+      if (timestamp != null && value != null) {
+        samples.add(
+          HealthChartPoint(
+            DateTime.fromMillisecondsSinceEpoch((timestamp * 1000).round()),
+            value,
+          ),
+        );
+      }
+    }
+    samples.sort((a, b) => a.time.compareTo(b.time));
+    return samples;
+  }
+
+  List<HealthChartPoint> _mergeHealthSamples(
+    List<HealthChartPoint> first,
+    List<HealthChartPoint> second,
+  ) {
+    final bySecond = <int, HealthChartPoint>{};
+    for (final sample in [...first, ...second]) {
+      bySecond[sample.time.millisecondsSinceEpoch ~/ 1000] = sample;
+    }
+    final merged = bySecond.values.toList()
+      ..sort((a, b) => a.time.compareTo(b.time));
+    if (merged.length <= 240) {
+      return merged;
+    }
+    final step = (merged.length - 1) / 239;
+    return [for (var i = 0; i < 240; i++) merged[(i * step).round()]];
+  }
+
+  double? _payloadDouble(Object? value) {
+    return value is num ? value.toDouble() : double.tryParse('$value');
+  }
+
+  DateTime? _payloadDate(Object? value) {
+    final timestamp = _payloadDouble(value);
+    if (timestamp == null) {
+      return null;
+    }
+    return DateTime.fromMillisecondsSinceEpoch((timestamp * 1000).round());
   }
 
   Future<void> _loadAutoSwitchSettings() async {
@@ -500,8 +1195,10 @@ class _StressHomePageState extends State<StressHomePage>
   Future<void> _openUserHome() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (context) =>
-            UserHomePage(currentEstimate: _latestHealthEstimate),
+        builder: (context) => UserHomePage(
+          currentEstimate: _latestHealthEstimate,
+          onHrvBaselineChanged: () => unawaited(_syncHealthStress()),
+        ),
       ),
     );
     if (!mounted) {
@@ -588,9 +1285,9 @@ class _StressHomePageState extends State<StressHomePage>
     }
   }
 
-  Future<void> _syncHealthStress() async {
-    if (_isSyncingHealth) {
-      return;
+  Future<bool> _syncHealthStress({bool showResult = true}) async {
+    if (!mounted || _isSyncingHealth) {
+      return false;
     }
 
     setState(() {
@@ -599,11 +1296,17 @@ class _StressHomePageState extends State<StressHomePage>
     });
 
     try {
-      final result = await const HealthStressEstimator().estimate(
+      final phoneResult = await const HealthStressEstimator().estimate(
         lastStress: _stressValue,
       );
+      final result = _latestWatchHealthPayload == null
+          ? phoneResult
+          : _mergeWatchAndPhoneHealth(
+              phoneEstimate: phoneResult,
+              watchPayload: _latestWatchHealthPayload!,
+            );
       if (!mounted) {
-        return;
+        return false;
       }
       setState(() {
         _stressValue = result.stressValue;
@@ -611,25 +1314,38 @@ class _StressHomePageState extends State<StressHomePage>
         _latestHealthEstimate = result;
         _aiSupportSuggestion = null;
       });
+      unawaited(
+        _FlowerNotificationService.handleStressValue(result.stressValue),
+      );
+      unawaited(_syncHealthEstimateToWatch(phoneResult));
       unawaited(_refreshAiSupportSuggestion());
-      _showHealthSyncResult(result.summary);
+      if (showResult) {
+        _showHealthSyncResult(result.summary);
+      }
+      return true;
     } on HealthStressPermissionException catch (error) {
       if (!mounted) {
-        return;
+        return false;
       }
       setState(() => _healthSyncSummary = error.message);
-      _showHealthSyncResult(error.message);
+      if (showResult) {
+        _showHealthSyncResult(error.message);
+      }
+      return false;
     } catch (_) {
       if (!mounted) {
-        return;
+        return false;
       }
       final message = Platform.isAndroid
           ? '暂时无法读取 Health Connect 数据。现在可先手动录入或使用测试数据。'
           : '暂时无法读取健康数据，请确认 HealthKit 权限和真机数据。';
       setState(() => _healthSyncSummary = message);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      if (showResult) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      }
+      return false;
     } finally {
       if (mounted) {
         setState(() => _isSyncingHealth = false);
@@ -686,6 +1402,8 @@ class _StressHomePageState extends State<StressHomePage>
       _latestHealthEstimate = result;
       _aiSupportSuggestion = null;
     });
+    unawaited(_FlowerNotificationService.handleStressValue(result.stressValue));
+    unawaited(_syncHealthEstimateToWatch(result));
     unawaited(_refreshAiSupportSuggestion());
     ScaffoldMessenger.of(
       context,
@@ -2332,11 +3050,384 @@ class VillageLinkPage extends StatelessWidget {
   }
 }
 
+enum _StressNotificationZone {
+  energetic('活力满满'),
+  balanced('压力平衡'),
+  caution('注意压力'),
+  overloaded('压力超载');
+
+  const _StressNotificationZone(this.label);
+
+  final String label;
+
+  static _StressNotificationZone fromValue(double value) {
+    if (value <= 20) {
+      return energetic;
+    }
+    if (value <= 60) {
+      return balanced;
+    }
+    if (value <= 80) {
+      return caution;
+    }
+    return overloaded;
+  }
+}
+
+const Map<(_StressNotificationZone, _StressNotificationZone), List<String>>
+_stressTransitionMessages = {
+  (_StressNotificationZone.energetic, _StressNotificationZone.balanced): [
+    '压力稍微上升了一点，刚刚开始忙起来了吗？',
+    '身体从轻松状态进入了日常节奏，现在感觉还好吗？',
+    '状态有一点变化，是开始学习、工作，还是遇到了什么事？',
+    '你好像比刚才更紧绷了一些，需要和灯塔说说吗？',
+    '压力正在靠近正常水平，是专注起来了，还是有点担心什么？',
+  ],
+  (_StressNotificationZone.caution, _StressNotificationZone.balanced): [
+    '压力正在回落，你已经缓过来一些了吗？',
+    '身体慢慢放松下来了，刚才做了什么帮助自己？',
+    '状态回到了平衡区，困扰你的事情解决了吗？',
+    '刚才似乎有点辛苦，现在愿意和灯塔聊聊吗？',
+    '你正在找回自己的节奏，要不要记录一下有效的方法？',
+  ],
+  (_StressNotificationZone.overloaded, _StressNotificationZone.balanced): [
+    '压力明显回落了，你终于可以稍微松一口气了。刚才发生了什么？',
+    '身体正在从高负荷中恢复，现在感觉好一点了吗？',
+    '状态一次跨回了平衡区，能告诉我是什么帮助了你吗？',
+    '刚才承受了不少压力，想和灯塔聊聊吗？',
+  ],
+  (_StressNotificationZone.balanced, _StressNotificationZone.energetic): [
+    '状态变得更轻松了，刚刚有什么好事发生吗？',
+    '身体正在告诉你“放松下来了”，你也有这种感觉吗？',
+    '压力回到了很低的位置，是休息起作用了吗？',
+    '现在的状态很轻盈，可不可以告诉灯塔是什么让你保持这种心态的？',
+    '你似乎找到了舒服的节奏，要不要把它记录下来？',
+  ],
+  (_StressNotificationZone.caution, _StressNotificationZone.energetic): [
+    '压力下降得很明显，是什么让你一下子轻松了许多？',
+    '状态从紧绷变得轻盈，刚才的问题解决了吗？',
+    '身体恢复得很快，是离开了压力环境，还是调整了心情？',
+    '看起来你已经放松了很多，愿意告诉灯塔发生了什么吗？',
+    '这次恢复很有效，要不要记下你刚才使用的方法？',
+  ],
+  (_StressNotificationZone.overloaded, _StressNotificationZone.energetic): [
+    '压力从高位快速回落，你刚刚休息了，还是换了一个环境？',
+    '身体数据突然轻松了许多，你现在的实际感受怎么样？',
+    '这次变化幅度比较大，要和灯塔确认一下此刻的心情吗？',
+    '看起来已经缓过来了，但还是想问问：你现在真的还好吗？',
+  ],
+  (_StressNotificationZone.balanced, _StressNotificationZone.caution): [
+    '压力开始升高了，刚刚遇到了什么事情？',
+    '身体似乎比刚才更紧绷了呢，是工作、学习，还是情绪上的事？',
+    '状态进入了需要留意的范围，现在最困扰你的是什么？',
+    '你可能正在用力应对什么，需要灯塔陪你理一理吗？',
+    '压力正在累积，你想先休息一下，还是先说说发生了什么？',
+  ],
+  (_StressNotificationZone.energetic, _StressNotificationZone.caution): [
+    '压力比刚才升高了不少，是突然发生什么了吗？',
+    '你从轻松状态快速变得紧绷，现在方便停一下吗？',
+    '身体出现了明显变化，刚才收到了什么消息，或者遇到了什么事？',
+    '这次变化有些突然，你现在更需要倾诉还是恢复建议？',
+    '刚才还比较轻松，现在是什么让你开始担心了？',
+  ],
+  (_StressNotificationZone.overloaded, _StressNotificationZone.caution): [
+    '压力正在下降，但身体可能还需要一点时间。现在感觉好些了吗？',
+    '你已经从最紧绷的状态缓过来一些，还需要灯塔陪你吗？',
+    '状态有所恢复，先别急着继续忙，刚才发生了什么？',
+    '身体正在慢慢松开，现在更想休息还是聊一聊？',
+    '最难受的阶段似乎过去了一些，你还在担心什么吗？',
+  ],
+  (_StressNotificationZone.caution, _StressNotificationZone.overloaded): [
+    '压力还在上升，现在最让你难受的是什么？',
+    '身体进入了高负荷状态，要不要先停下来和灯塔说几句话？',
+    '你似乎已经紧绷了一阵子，是事情还没有解决吗？',
+    '先不用独自撑着，此刻你更需要倾诉、呼吸练习，还是恢复建议？',
+    '状态正在继续升高，你现在是否方便暂时离开压力环境？',
+  ],
+  (_StressNotificationZone.balanced, _StressNotificationZone.overloaded): [
+    '压力突然升高了很多，刚刚发生什么事情了？',
+    '身体的变化比较明显，你现在是否处在安全、方便休息的地方？',
+    '状态一下子变得很紧绷，是突发事件还是情绪突然涌上来了？',
+    '先把其他事情放一放，你愿意告诉灯塔现在最需要什么吗？',
+    '这次压力来得有点快，需要灯塔先陪你做一次短暂恢复吗？',
+  ],
+  (_StressNotificationZone.energetic, _StressNotificationZone.overloaded): [
+    '压力在短时间内大幅升高，发生什么了？',
+    '你刚刚似乎经历了很强的变化，现在还好吗？',
+    '身体正在发出明显提醒，可以先停下来告诉灯塔发生了什么吗？',
+    '先不用处理所有事情，此刻最让你难受的是哪一件？',
+    '这次变化很突然。你想先倾诉，还是让灯塔带你慢慢稳定下来？',
+  ],
+};
+
 class FlowerReminderPage extends StatefulWidget {
-  const FlowerReminderPage({super.key});
+  const FlowerReminderPage({
+    super.key,
+    this.initialGardenFlowerName,
+    this.initialGardenMood,
+    this.initialGardenMessage,
+  });
+
+  final String? initialGardenFlowerName;
+  final String? initialGardenMood;
+  final String? initialGardenMessage;
 
   @override
   State<FlowerReminderPage> createState() => _FlowerReminderPageState();
+}
+
+class FlowerLetterReceiptPage extends StatefulWidget {
+  const FlowerLetterReceiptPage({super.key, required this.reminderId});
+
+  final String reminderId;
+
+  @override
+  State<FlowerLetterReceiptPage> createState() =>
+      _FlowerLetterReceiptPageState();
+}
+
+class _FlowerLetterReceiptPageState extends State<FlowerLetterReceiptPage> {
+  _FlowerReminder? _letter;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLetter();
+  }
+
+  Future<void> _loadLetter() async {
+    final reminders = await _loadStoredFlowerReminders();
+    final index = reminders.indexWhere((item) => item.id == widget.reminderId);
+    if (index == -1) return;
+    final delivered = reminders[index].copyWith(
+      deliveredAt: DateTime.now(),
+      clearSnooze: true,
+    );
+    reminders[index] = delivered;
+    await _saveStoredFlowerReminders(reminders);
+    if (mounted) setState(() => _letter = delivered);
+  }
+
+  Future<void> _respond(VoidCallback openDestination) async {
+    await _markResponded();
+    if (mounted) openDestination();
+  }
+
+  Future<void> _markResponded({DateTime? snoozedUntil}) async {
+    final letter = _letter;
+    if (letter == null) return;
+    final reminders = await _loadStoredFlowerReminders();
+    final index = reminders.indexWhere((item) => item.id == letter.id);
+    if (index != -1) {
+      final responded = reminders[index].copyWith(
+        respondedAt: DateTime.now(),
+        snoozedUntil: snoozedUntil,
+        clearSnooze: snoozedUntil == null,
+      );
+      reminders[index] = responded;
+      await _saveStoredFlowerReminders(reminders);
+      if (mounted) setState(() => _letter = responded);
+    }
+  }
+
+  Future<void> _completeReminder() async {
+    await _markResponded();
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('收到，灯塔替你记下了。')));
+  }
+
+  Future<void> _snoozeReminder() async {
+    final letter = _letter;
+    if (letter == null) return;
+    const delay = Duration(minutes: 10);
+    final snoozedUntil = DateTime.now().add(delay);
+    await _FlowerNotificationService.scheduleSnooze(letter, delay: delay);
+    await _markResponded(snoozedUntil: snoozedUntil);
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('这封信会在 10 分钟后再来。')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final letter = _letter;
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FFF4),
+      appBar: AppBar(
+        title: const Text('花时来信'),
+        backgroundColor: const Color(0xFFF8FFF4),
+        foregroundColor: const Color(0xFF24302A),
+      ),
+      body: letter == null
+          ? const Center(child: CircularProgressIndicator())
+          : SafeArea(
+              child: ListView(
+                padding: const EdgeInsets.all(22),
+                children: [
+                  const Icon(
+                    Icons.local_florist_outlined,
+                    size: 54,
+                    color: Color(0xFF5C9B72),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    letter.source == 'garden' && letter.flowerName != null
+                        ? '${letter.flowerName}从花园来到了这里'
+                        : letter.source == 'stress'
+                        ? '身体状态发生了变化'
+                        : '${letter.event}提醒到了',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: const Color(0xFF24302A),
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${letter.sourceLabel} · ${letter.frequencyLabel}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color(0xFF6B8279),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Container(
+                    padding: const EdgeInsets.all(22),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFDCEFE4)),
+                    ),
+                    child: Text(
+                      letter.message,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFF365047),
+                        height: 1.65,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  if (letter.source == 'reminder') ...[
+                    FilledButton.icon(
+                      onPressed: _completeReminder,
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('我完成了'),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: _snoozeReminder,
+                      icon: const Icon(Icons.snooze_outlined),
+                      label: const Text('10 分钟后再提醒'),
+                    ),
+                    const SizedBox(height: 18),
+                  ],
+                  if (letter.source == 'stress' &&
+                      letter.stressValue != null) ...[
+                    FilledButton.icon(
+                      onPressed: () => _respond(
+                        () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (context) =>
+                                NotificationRecoveryAdvicePage(
+                                  stressValue: letter.stressValue!,
+                                  transitionMessage:
+                                      letter.stressTransitionMessage ??
+                                      letter.message,
+                                ),
+                          ),
+                        ),
+                      ),
+                      icon: const Icon(Icons.favorite_border_rounded),
+                      label: const Text('查看此刻的恢复建议'),
+                    ),
+                    const SizedBox(height: 18),
+                  ],
+                  FilledButton.icon(
+                    onPressed: () => _respond(
+                      () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (context) => const MyGardenPage(),
+                        ),
+                      ),
+                    ),
+                    icon: const Icon(Icons.eco_outlined),
+                    label: Text(letter.opensGarden ? '去选一朵花' : '记录此刻心情'),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () => _respond(
+                      () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (context) => DeepSeekChatPage(
+                            initialFlowerLetterId: letter.id,
+                            initialFlowerLetterMessage: letter.message,
+                          ),
+                        ),
+                      ),
+                    ),
+                    icon: const Icon(Icons.forum_outlined),
+                    label: const Text('和灯塔聊聊'),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+Future<List<_FlowerReminder>> _loadStoredFlowerReminders() async {
+  final prefs = await SharedPreferences.getInstance();
+  final raw = prefs.getString(_flowerReminderStorageKey);
+  if (raw == null || raw.isEmpty) return [];
+  final decoded = jsonDecode(raw);
+  if (decoded is! List) return [];
+  return decoded
+      .whereType<Map>()
+      .map((item) => _FlowerReminder.fromJson(Map<String, Object?>.from(item)))
+      .toList();
+}
+
+Future<void> _saveStoredFlowerReminders(List<_FlowerReminder> reminders) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(
+    _flowerReminderStorageKey,
+    jsonEncode(reminders.map((item) => item.toJson()).toList()),
+  );
+}
+
+Future<_FlowerReminder> _recordStressTriggeredLetter({
+  required _StressNotificationZone previousZone,
+  required _StressNotificationZone currentZone,
+  required int stressValue,
+  required String message,
+}) async {
+  final now = DateTime.now();
+  final reminder = _FlowerReminder(
+    id: 'stress-${now.microsecondsSinceEpoch}',
+    event: '${previousZone.label} → ${currentZone.label}',
+    category: '身体状态',
+    subcategory: currentZone.label,
+    message: '当前压力 $stressValue% · $message',
+    frequency: '仅一次',
+    weekdays: const [],
+    hour: now.hour,
+    minute: now.minute,
+    createdAt: now,
+    source: 'stress',
+    scheduledAt: now,
+    stressValue: stressValue,
+    stressTransitionMessage: message,
+  );
+  final reminders = await _loadStoredFlowerReminders();
+  await _saveStoredFlowerReminders([reminder, ...reminders].take(100).toList());
+  return reminder;
 }
 
 class _FlowerNotificationService {
@@ -2344,7 +3435,9 @@ class _FlowerNotificationService {
 
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
+  static final Random _random = Random();
   static bool _initialized = false;
+  static Future<void> _stressTransitionQueue = Future<void>.value();
 
   static Future<void> initialize() async {
     if (_initialized) {
@@ -2360,8 +3453,15 @@ class _FlowerNotificationService {
     try {
       await _plugin.initialize(
         settings: const InitializationSettings(android: android, iOS: darwin),
+        onDidReceiveNotificationResponse: _onNotificationResponse,
       );
       _initialized = true;
+      final launchDetails = await _plugin.getNotificationAppLaunchDetails();
+      if (launchDetails?.didNotificationLaunchApp == true) {
+        _handleNotificationPayload(
+          launchDetails?.notificationResponse?.payload,
+        );
+      }
       await _rescheduleStoredReminders();
       await scheduleBirthdayGreeting();
     } on MissingPluginException {
@@ -2370,6 +3470,114 @@ class _FlowerNotificationService {
       _initialized = false;
     } catch (_) {
       _initialized = false;
+    }
+  }
+
+  static void _onNotificationResponse(NotificationResponse response) {
+    _handleNotificationPayload(response.payload);
+  }
+
+  static void _handleNotificationPayload(String? payload) {
+    final flowerLetter = _FlowerLetterNavigationData.fromPayload(payload);
+    if (flowerLetter != null) {
+      _openFlowerLetterFromNotification(flowerLetter);
+      return;
+    }
+    final navigationData = _StressNotificationNavigationData.fromPayload(
+      payload,
+    );
+    if (navigationData != null) {
+      _openRecoveryAdviceFromStressNotification(navigationData);
+    }
+  }
+
+  static Future<void> handleStressValue(double value) {
+    _stressTransitionQueue = _stressTransitionQueue.then(
+      (_) => _handleStressValueSerially(value),
+    );
+    return _stressTransitionQueue;
+  }
+
+  static Future<void> _handleStressValueSerially(double value) async {
+    final currentZone = _StressNotificationZone.fromValue(
+      value.clamp(0, 100).toDouble(),
+    );
+    final prefs = await SharedPreferences.getInstance();
+    final previousZoneName = prefs.getString(_lastStressNotificationZoneKey);
+    await prefs.setString(_lastStressNotificationZoneKey, currentZone.name);
+    if (previousZoneName == null || previousZoneName == currentZone.name) {
+      return;
+    }
+
+    final previousZone = _StressNotificationZone.values
+        .where((zone) => zone.name == previousZoneName)
+        .firstOrNull;
+    if (previousZone == null) {
+      return;
+    }
+    final candidates = _stressTransitionMessages[(previousZone, currentZone)];
+    if (candidates == null || candidates.isEmpty) {
+      return;
+    }
+
+    final lastNotificationMillis = prefs.getInt(_lastStressNotificationTimeKey);
+    if (lastNotificationMillis != null &&
+        DateTime.now().difference(
+              DateTime.fromMillisecondsSinceEpoch(lastNotificationMillis),
+            ) <
+            const Duration(minutes: 30)) {
+      return;
+    }
+
+    final lastMessage = prefs.getString(_lastStressNotificationMessageKey);
+    final available = candidates.length > 1
+        ? candidates.where((message) => message != lastMessage).toList()
+        : candidates;
+    final message = available[_random.nextInt(available.length)];
+    await prefs.setString(_lastStressNotificationMessageKey, message);
+
+    if (!await requestPermission()) {
+      return;
+    }
+    final stressLetter = await _recordStressTriggeredLetter(
+      previousZone: previousZone,
+      currentZone: currentZone,
+      stressValue: value.round(),
+      message: message,
+    );
+    try {
+      await _plugin.show(
+        id: _notificationId('stress-transition'),
+        title: '${previousZone.label} → ${currentZone.label}',
+        body: '当前压力 ${value.round()}% · $message',
+        notificationDetails: const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'stress_changes',
+            '压力变化',
+            channelDescription: '压力跨越状态区间时由灯塔发出的提醒',
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: false,
+            presentSound: true,
+          ),
+        ),
+        payload: _FlowerLetterNavigationData(
+          reminderId: stressLetter.id,
+        ).toPayload(),
+      );
+      await prefs.setInt(
+        _lastStressNotificationTimeKey,
+        DateTime.now().millisecondsSinceEpoch,
+      );
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    } catch (_) {
+      return;
     }
   }
 
@@ -2412,8 +3620,28 @@ class _FlowerNotificationService {
         '花时来信',
         reminder.message,
         dates[i],
+        payload: _FlowerLetterNavigationData(
+          reminderId: reminder.id,
+        ).toPayload(),
       );
     }
+  }
+
+  static Future<void> scheduleSnooze(
+    _FlowerReminder reminder, {
+    Duration delay = const Duration(minutes: 10),
+  }) async {
+    if (!await requestPermission()) return;
+    final date = DateTime.now().add(delay);
+    await _safeSchedule(
+      _notificationId(
+        'flower-snooze-${reminder.id}-${date.millisecondsSinceEpoch}',
+      ),
+      '花时来信 · ${reminder.event}',
+      reminder.message,
+      date,
+      payload: _FlowerLetterNavigationData(reminderId: reminder.id).toPayload(),
+    );
   }
 
   static Future<void> cancelReminder(String id) async {
@@ -2512,6 +3740,14 @@ class _FlowerNotificationService {
     required int limit,
   }) {
     final now = DateTime.now();
+    final exactDate = reminder.scheduledAt;
+    if (reminder.frequency == '仅一次' && exactDate != null) {
+      if (!exactDate.isAfter(now) ||
+          _isQuietTime(exactDate.hour * 60 + exactDate.minute, quiet)) {
+        return const [];
+      }
+      return [exactDate];
+    }
     final dates = <DateTime>[];
     for (
       var dayOffset = 0;
@@ -2545,6 +3781,9 @@ class _FlowerNotificationService {
         continue;
       }
       dates.add(date);
+      if (reminder.frequency == '仅一次') {
+        break;
+      }
     }
     return dates;
   }
@@ -2563,8 +3802,9 @@ class _FlowerNotificationService {
     int id,
     String title,
     String body,
-    DateTime date,
-  ) async {
+    DateTime date, {
+    String? payload,
+  }) async {
     try {
       await _plugin.zonedSchedule(
         id: id,
@@ -2582,6 +3822,7 @@ class _FlowerNotificationService {
           iOS: DarwinNotificationDetails(),
         ),
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        payload: payload,
       );
     } on MissingPluginException {
       return;
@@ -2621,7 +3862,7 @@ class _FlowerNotificationService {
 }
 
 class _FlowerReminderPageState extends State<FlowerReminderPage> {
-  static const _frequencies = ['每天', '工作日', '自定义'];
+  static const _frequencies = ['仅一次', '每天', '工作日', '自定义'];
 
   final _customMessageController = TextEditingController();
   final _customWeekdays = <int>{1, 3, 5};
@@ -2632,10 +3873,32 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
   TimeOfDay _selectedTime = const TimeOfDay(hour: 9, minute: 0);
   _ReminderPhrase _selectedPhrase = _reminderPhrases.first;
   List<_FlowerReminder> _reminders = [];
+  bool _isGeneratingLetter = false;
+  bool _remindToChooseFlower = false;
+  String _letterFilter = '全部';
+
+  List<_FlowerReminder> get _filteredReminders {
+    return switch (_letterFilter) {
+      '待寄出' => _reminders.where((item) => !item.isDelivered).toList(),
+      '已抵达' =>
+        _reminders
+            .where((item) => item.isDelivered && !item.isResponded)
+            .toList(),
+      '已回应' => _reminders.where((item) => item.isResponded).toList(),
+      _ => _reminders,
+    };
+  }
 
   @override
   void initState() {
     super.initState();
+    final gardenMessage = widget.initialGardenMessage?.trim();
+    if (gardenMessage != null && gardenMessage.isNotEmpty) {
+      _frequency = '仅一次';
+      final nextHour = DateTime.now().add(const Duration(hours: 1));
+      _selectedTime = TimeOfDay(hour: nextHour.hour, minute: nextHour.minute);
+      _customMessageController.text = gardenMessage;
+    }
     _loadReminders();
   }
 
@@ -2701,23 +3964,103 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
     }
   }
 
+  Future<void> _askLighthouseToWrite() async {
+    if (_isGeneratingLetter) return;
+    setState(() => _isGeneratingLetter = true);
+    try {
+      final history = await _loadRecentGardenHistory();
+      final options = _homeDeepSeekApiKey.isEmpty || _homeDeepSeekApiUrl.isEmpty
+          ? _localFlowerLetterOptions(history)
+          : await _DeepSeekChatClient(
+              apiKey: _homeDeepSeekApiKey,
+              model: _homeDeepSeekModel,
+              apiUrl: _homeDeepSeekApiUrl,
+            ).flowerLetterOptions(recentHistory: history);
+      if (!mounted) return;
+      setState(() => _isGeneratingLetter = false);
+      final selected = await showDialog<String>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('灯塔写了三封短信'),
+          children: [
+            for (final option in options.take(3))
+              SimpleDialogOption(
+                onPressed: () => Navigator.of(context).pop(option),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(option, style: const TextStyle(height: 1.45)),
+                ),
+              ),
+          ],
+        ),
+      );
+      if (selected != null && mounted) {
+        _customMessageController.text = selected;
+        setState(() {});
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('灯塔暂时没有连上，请稍后再试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _isGeneratingLetter = false);
+    }
+  }
+
+  Future<List<_GardenSelectionRecord>> _loadRecentGardenHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('garden_selection_history');
+    if (raw == null || raw.isEmpty) return const [];
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map<String, Object?>>()
+        .map(_GardenSelectionRecord.fromJson)
+        .take(3)
+        .toList();
+  }
+
   Future<void> _addReminder() async {
     final customMessage = _customMessageController.text.trim();
-    final message = customMessage.isEmpty
-        ? _selectedPhrase.text
-        : customMessage;
+    final message = _remindToChooseFlower
+        ? (customMessage.isEmpty
+              ? '来花园选一朵最像此刻心情的花吧。不用想得很准，看见自己就好。'
+              : customMessage)
+        : (customMessage.isEmpty ? _selectedPhrase.text : customMessage);
+    final now = DateTime.now();
+    var oneTimeDate = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      _selectedTime.hour,
+      _selectedTime.minute,
+    );
+    if (!oneTimeDate.isAfter(now)) {
+      oneTimeDate = oneTimeDate.add(const Duration(days: 1));
+    }
 
     final reminder = _FlowerReminder(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
-      event: _selectedSubcategory,
-      category: _selectedPhrase.category,
-      subcategory: _selectedPhrase.subcategory,
+      event: _remindToChooseFlower
+          ? '选一朵今日心情花'
+          : widget.initialGardenFlowerName == null
+          ? _selectedSubcategory
+          : '${widget.initialGardenMood ?? '那天的心情'} · ${widget.initialGardenFlowerName}',
+      category: _remindToChooseFlower ? '花园' : _selectedPhrase.category,
+      subcategory: _remindToChooseFlower ? '选花记录' : _selectedPhrase.subcategory,
       message: message,
       frequency: _frequency,
       weekdays: _frequency == '自定义' ? (_customWeekdays.toList()..sort()) : [],
       hour: _selectedTime.hour,
       minute: _selectedTime.minute,
-      createdAt: DateTime.now(),
+      createdAt: now,
+      source: widget.initialGardenMessage == null ? 'reminder' : 'garden',
+      flowerName: widget.initialGardenFlowerName,
+      mood: widget.initialGardenMood,
+      opensGarden: _remindToChooseFlower,
+      scheduledAt: _frequency == '仅一次' ? oneTimeDate : null,
     );
 
     setState(() {
@@ -2743,6 +4086,15 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
     await _FlowerNotificationService.cancelReminder(id);
   }
 
+  Future<void> _openReminder(_FlowerReminder reminder) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => FlowerLetterReceiptPage(reminderId: reminder.id),
+      ),
+    );
+    await _loadReminders();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2766,69 +4118,118 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
               ),
             ),
             const SizedBox(height: 16),
-            _ReminderPanel(
-              title: '提醒内容',
-              child: Column(
-                children: [
-                  _ReminderDropdown<String>(
-                    label: '先选择提醒方向',
-                    value: _selectedCategory,
-                    values: _reminderCategories,
-                    labelFor: (value) => value,
-                    onChanged: (category) {
-                      final nextPhrase = _reminderPhrases.firstWhere(
-                        (phrase) => phrase.category == category,
-                      );
-                      setState(() {
-                        _selectedCategory = category;
-                        _selectedSubcategory = nextPhrase.subcategory;
-                        _selectedPhrase = nextPhrase;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  _ReminderDropdown<String>(
-                    label: '再选择具体提醒事项',
-                    value: _selectedSubcategory,
-                    values: _filteredSubcategories,
-                    labelFor: (value) => value,
-                    onChanged: (subcategory) {
-                      final nextPhrase = _reminderPhrases.firstWhere(
-                        (phrase) =>
-                            phrase.category == _selectedCategory &&
-                            phrase.subcategory == subcategory,
-                      );
-                      setState(() {
-                        _selectedSubcategory = subcategory;
-                        _selectedPhrase = nextPhrase;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  _PhrasePicker(
-                    phrases: _filteredPhrases,
-                    selectedPhrase: _selectedPhrase,
-                    onChanged: (phrase) {
-                      setState(() => _selectedPhrase = phrase);
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  _ReminderTextField(
-                    controller: _customMessageController,
-                    label: '自定义提醒语句（可选）',
-                    hintText: '留空时使用上面的花园预设文案',
-                    maxLines: 3,
-                  ),
-                ],
+            if (!_remindToChooseFlower)
+              _ReminderPanel(
+                title: '提醒内容',
+                child: Column(
+                  children: [
+                    _ReminderDropdown<String>(
+                      label: '先选择提醒方向',
+                      value: _selectedCategory,
+                      values: _reminderCategories,
+                      labelFor: (value) => value,
+                      onChanged: (category) {
+                        final nextPhrase = _reminderPhrases.firstWhere(
+                          (phrase) => phrase.category == category,
+                        );
+                        setState(() {
+                          _selectedCategory = category;
+                          _selectedSubcategory = nextPhrase.subcategory;
+                          _selectedPhrase = nextPhrase;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    _ReminderDropdown<String>(
+                      label: '再选择具体提醒事项',
+                      value: _selectedSubcategory,
+                      values: _filteredSubcategories,
+                      labelFor: (value) => value,
+                      onChanged: (subcategory) {
+                        final nextPhrase = _reminderPhrases.firstWhere(
+                          (phrase) =>
+                              phrase.category == _selectedCategory &&
+                              phrase.subcategory == subcategory,
+                        );
+                        setState(() {
+                          _selectedSubcategory = subcategory;
+                          _selectedPhrase = nextPhrase;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    _PhrasePicker(
+                      phrases: _filteredPhrases,
+                      selectedPhrase: _selectedPhrase,
+                      onChanged: (phrase) {
+                        setState(() => _selectedPhrase = phrase);
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    OutlinedButton.icon(
+                      onPressed: _isGeneratingLetter
+                          ? null
+                          : _askLighthouseToWrite,
+                      icon: _isGeneratingLetter
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.auto_awesome_outlined),
+                      label: Text(_isGeneratingLetter ? '灯塔正在写信' : '灯塔帮我写'),
+                    ),
+                    const SizedBox(height: 14),
+                    _ReminderTextField(
+                      controller: _customMessageController,
+                      label: '自定义提醒语句（可选）',
+                      hintText: '留空时使用上面的花园预设文案',
+                      maxLines: 3,
+                    ),
+                  ],
+                ),
               ),
-            ),
             _ReminderPanel(
               title: '频率选项',
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '提醒我选一朵花',
+                              style: TextStyle(fontWeight: FontWeight.w900),
+                            ),
+                            SizedBox(height: 2),
+                            Text('来信时直接带你进入花园。'),
+                          ],
+                        ),
+                      ),
+                      Switch.adaptive(
+                        value: _remindToChooseFlower,
+                        onChanged: (value) {
+                          setState(() {
+                            _remindToChooseFlower = value;
+                            if (value) {
+                              _frequency = '每天';
+                              _selectedTime = const TimeOfDay(
+                                hour: 21,
+                                minute: 0,
+                              );
+                              _customMessageController.clear();
+                            }
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
                   SegmentedButton<String>(
                     segments: const [
+                      ButtonSegment(value: '仅一次', label: Text('一次')),
                       ButtonSegment(value: '每天', label: Text('每天')),
                       ButtonSegment(value: '工作日', label: Text('工作日')),
                       ButtonSegment(value: '自定义', label: Text('自定义')),
@@ -2939,17 +4340,70 @@ class _FlowerReminderPageState extends State<FlowerReminderPage> {
             const SizedBox(height: 18),
             _ReminderPanel(
               title: '已收下的来信',
-              child: _reminders.isEmpty
-                  ? const _EmptyReminderState()
-                  : Column(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_reminders.isNotEmpty) ...[
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
                       children: [
-                        for (final reminder in _reminders)
-                          _SavedReminderCard(
-                            reminder: reminder,
-                            onDelete: () => _deleteReminder(reminder.id),
+                        for (final filter in const ['全部', '待寄出', '已抵达', '已回应'])
+                          ChoiceChip(
+                            label: Text(filter),
+                            selected: _letterFilter == filter,
+                            onSelected: (_) =>
+                                setState(() => _letterFilter = filter),
                           ),
                       ],
                     ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (_reminders.isEmpty)
+                    const _EmptyReminderState()
+                  else if (_filteredReminders.isEmpty)
+                    const Text(
+                      '这里还没有来信。',
+                      style: TextStyle(
+                        color: Color(0xFF587171),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    )
+                  else
+                    for (final reminder in _filteredReminders)
+                      _SavedReminderCard(
+                        reminder: reminder,
+                        onOpen: () => _openReminder(reminder),
+                        onDelete: () => _deleteReminder(reminder.id),
+                      ),
+                ],
+              ),
+            ),
+            const _ReminderPanel(
+              title: '来信会怎样抵达',
+              child: Column(
+                children: [
+                  _LetterSourceDescription(
+                    icon: Icons.schedule_outlined,
+                    title: '你种下的提醒',
+                    description: '喝水、吃饭、睡眠等日常提醒，或写给未来自己的信，会按你选择的时间送达。',
+                  ),
+                  SizedBox(height: 12),
+                  _LetterSourceDescription(
+                    icon: Icons.monitor_heart_outlined,
+                    title: '身体状态的来信',
+                    description:
+                        '当压力状态出现明显变化时，灯塔也会发来一封关怀提醒，带你查看当下适合的恢复建议。它由身体信号触发，不按固定时间发送，并会避免频繁打扰。',
+                  ),
+                  SizedBox(height: 12),
+                  _LetterSourceDescription(
+                    icon: Icons.forum_outlined,
+                    title: '对话里的未来约定',
+                    description:
+                        '当你在灯塔对话里提到明天、今晚或“提醒我”时，灯塔会先准备一封草稿。只有经过你的确认，它才会成为来信。',
+                  ),
+                ],
+              ),
             ),
             const _PhraseReferenceAccordion(),
           ],
@@ -3004,6 +4458,52 @@ class _ReminderPanel extends StatelessWidget {
           child,
         ],
       ),
+    );
+  }
+}
+
+class _LetterSourceDescription extends StatelessWidget {
+  const _LetterSourceDescription({
+    required this.icon,
+    required this.title,
+    required this.description,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: const Color(0xFF5C9B72), size: 22),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Color(0xFF24302A),
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                description,
+                style: const TextStyle(
+                  color: Color(0xFF587171),
+                  height: 1.4,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -3218,68 +4718,113 @@ class _EmptyReminderState extends StatelessWidget {
 }
 
 class _SavedReminderCard extends StatelessWidget {
-  const _SavedReminderCard({required this.reminder, required this.onDelete});
+  const _SavedReminderCard({
+    required this.reminder,
+    required this.onOpen,
+    required this.onDelete,
+  });
 
   final _FlowerReminder reminder;
+  final VoidCallback onOpen;
   final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF7FCF7),
+    return Material(
+      color: const Color(0xFFF7FCF7),
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: onOpen,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE4EFE5)),
+        child: Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE4EFE5)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                Icons.mark_email_unread_outlined,
+                color: Color(0xFF5C9B72),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      reminder.event,
+                      style: const TextStyle(
+                        color: Color(0xFF24302A),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Wrap(
+                      spacing: 6,
+                      children: [
+                        _ReminderTag(label: reminder.statusLabel),
+                        _ReminderTag(label: reminder.sourceLabel),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${reminder.frequencyLabel} · ${reminder.timeLabel}',
+                      style: const TextStyle(
+                        color: Color(0xFF587171),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      reminder.message,
+                      style: const TextStyle(
+                        color: Color(0xFF4E635B),
+                        height: 1.35,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '删除提醒',
+                onPressed: onDelete,
+                icon: const Icon(Icons.close, size: 18),
+              ),
+            ],
+          ),
+        ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(
-            Icons.mark_email_unread_outlined,
-            color: Color(0xFF5C9B72),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  reminder.event,
-                  style: const TextStyle(
-                    color: Color(0xFF24302A),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${reminder.frequencyLabel} · ${reminder.timeLabel}',
-                  style: const TextStyle(
-                    color: Color(0xFF587171),
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  reminder.message,
-                  style: const TextStyle(
-                    color: Color(0xFF4E635B),
-                    height: 1.35,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            tooltip: '删除提醒',
-            onPressed: onDelete,
-            icon: const Icon(Icons.close, size: 18),
-          ),
-        ],
+    );
+  }
+}
+
+class _ReminderTag extends StatelessWidget {
+  const _ReminderTag({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE7F4E9),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Color(0xFF4F765D),
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+        ),
       ),
     );
   }
@@ -3527,6 +5072,16 @@ class _FlowerReminder {
     required this.hour,
     required this.minute,
     required this.createdAt,
+    this.source = 'reminder',
+    this.flowerName,
+    this.mood,
+    this.deliveredAt,
+    this.respondedAt,
+    this.snoozedUntil,
+    this.scheduledAt,
+    this.stressValue,
+    this.stressTransitionMessage,
+    this.opensGarden = false,
   });
 
   final String id;
@@ -3539,8 +5094,76 @@ class _FlowerReminder {
   final int hour;
   final int minute;
   final DateTime createdAt;
+  final String source;
+  final String? flowerName;
+  final String? mood;
+  final DateTime? deliveredAt;
+  final DateTime? respondedAt;
+  final DateTime? snoozedUntil;
+  final DateTime? scheduledAt;
+  final int? stressValue;
+  final String? stressTransitionMessage;
+  final bool opensGarden;
+
+  String get sourceLabel => switch (source) {
+    'garden' => '来自花园',
+    'chat' => '来自灯塔对话',
+    'stress' => '身体状态',
+    _ => '日常提醒',
+  };
+
+  bool get isDelivered => deliveredAt != null;
+  bool get isResponded =>
+      respondedAt != null &&
+      (deliveredAt == null || !respondedAt!.isBefore(deliveredAt!));
+  String get statusLabel => snoozedUntil?.isAfter(DateTime.now()) == true
+      ? '稍后提醒'
+      : isResponded
+      ? frequency == '仅一次'
+            ? '已回应'
+            : '最近已回应'
+      : isDelivered
+      ? frequency == '仅一次'
+            ? '已抵达'
+            : '最近已抵达'
+      : '待寄出';
+
+  _FlowerReminder copyWith({
+    DateTime? deliveredAt,
+    DateTime? respondedAt,
+    DateTime? snoozedUntil,
+    bool clearSnooze = false,
+  }) {
+    return _FlowerReminder(
+      id: id,
+      event: event,
+      category: category,
+      subcategory: subcategory,
+      message: message,
+      frequency: frequency,
+      weekdays: weekdays,
+      hour: hour,
+      minute: minute,
+      createdAt: createdAt,
+      source: source,
+      flowerName: flowerName,
+      mood: mood,
+      deliveredAt: deliveredAt ?? this.deliveredAt,
+      respondedAt: respondedAt ?? this.respondedAt,
+      snoozedUntil: clearSnooze ? null : snoozedUntil ?? this.snoozedUntil,
+      scheduledAt: scheduledAt,
+      stressValue: stressValue,
+      stressTransitionMessage: stressTransitionMessage,
+      opensGarden: opensGarden,
+    );
+  }
 
   String get timeLabel {
+    if (scheduledAt != null) {
+      return '${scheduledAt!.month}月${scheduledAt!.day}日 '
+          '${scheduledAt!.hour.toString().padLeft(2, '0')}:'
+          '${scheduledAt!.minute.toString().padLeft(2, '0')}';
+    }
     return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
   }
 
@@ -3573,6 +5196,16 @@ class _FlowerReminder {
       'hour': hour,
       'minute': minute,
       'createdAt': createdAt.toIso8601String(),
+      'source': source,
+      'flowerName': flowerName,
+      'mood': mood,
+      'deliveredAt': deliveredAt?.toIso8601String(),
+      'respondedAt': respondedAt?.toIso8601String(),
+      'snoozedUntil': snoozedUntil?.toIso8601String(),
+      'scheduledAt': scheduledAt?.toIso8601String(),
+      'stressValue': stressValue,
+      'stressTransitionMessage': stressTransitionMessage,
+      'opensGarden': opensGarden,
     };
   }
 
@@ -3591,6 +5224,16 @@ class _FlowerReminder {
       createdAt:
           DateTime.tryParse(json['createdAt'] as String? ?? '') ??
           DateTime.now(),
+      source: json['source'] as String? ?? 'reminder',
+      flowerName: json['flowerName'] as String?,
+      mood: json['mood'] as String?,
+      deliveredAt: DateTime.tryParse(json['deliveredAt'] as String? ?? ''),
+      respondedAt: DateTime.tryParse(json['respondedAt'] as String? ?? ''),
+      snoozedUntil: DateTime.tryParse(json['snoozedUntil'] as String? ?? ''),
+      scheduledAt: DateTime.tryParse(json['scheduledAt'] as String? ?? ''),
+      stressValue: (json['stressValue'] as num?)?.round(),
+      stressTransitionMessage: json['stressTransitionMessage'] as String?,
+      opensGarden: json['opensGarden'] as bool? ?? false,
     );
   }
 }
@@ -4159,9 +5802,14 @@ class IslandFeaturePage extends StatelessWidget {
 }
 
 class UserHomePage extends StatefulWidget {
-  const UserHomePage({super.key, required this.currentEstimate});
+  const UserHomePage({
+    super.key,
+    required this.currentEstimate,
+    this.onHrvBaselineChanged,
+  });
 
   final HealthStressEstimate? currentEstimate;
+  final VoidCallback? onHrvBaselineChanged;
 
   @override
   State<UserHomePage> createState() => _UserHomePageState();
@@ -4179,6 +5827,7 @@ class _UserHomePageState extends State<UserHomePage> {
   String? _birthday;
   bool _testHealthDataEnabled = true;
   bool _useHrvForStress = true;
+  _HrvBaselineConfiguration? _hrvBaselineConfiguration;
   TimeOfDay _quietStartTime = const TimeOfDay(hour: 23, minute: 0);
   TimeOfDay _quietEndTime = const TimeOfDay(hour: 7, minute: 0);
   bool _isLoading = true;
@@ -4203,6 +5852,7 @@ class _UserHomePageState extends State<UserHomePage> {
         prefs.getBool(_testHealthDataEnabledKey) ?? true;
     final useHrvForStress = prefs.getBool(_useHrvForStressKey) ?? true;
     final quiet = await _FlowerNotificationService.quietWindow();
+    final hrvBaselineConfiguration = await _HrvBaselineManager.load();
     Map<String, dynamic>? answers;
     if (raw != null && raw.isNotEmpty) {
       final decoded = jsonDecode(raw);
@@ -4222,6 +5872,7 @@ class _UserHomePageState extends State<UserHomePage> {
       _birthday = birthday;
       _testHealthDataEnabled = testHealthDataEnabled;
       _useHrvForStress = useHrvForStress;
+      _hrvBaselineConfiguration = hrvBaselineConfiguration;
       _quietStartTime = _timeOfDayFromMinutes(quiet.start);
       _quietEndTime = _timeOfDayFromMinutes(quiet.end);
       _isLoading = false;
@@ -4246,6 +5897,36 @@ class _UserHomePageState extends State<UserHomePage> {
     }
     setState(() => _useHrvForStress = enabled);
     _showUserHomeMessage(enabled ? '已开启 HRV 压力估算' : '已关闭 HRV，可手动记录穿戴设备压力值');
+  }
+
+  Future<void> _configureHrvBaseline() async {
+    final previous = _hrvBaselineConfiguration;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (context) => const _HrvBaselinePage()),
+    );
+    final configuration = await _HrvBaselineManager.load();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _hrvBaselineConfiguration = configuration);
+    if (previous?.customBaseline != configuration.customBaseline ||
+        previous?.effectiveBaseline != configuration.effectiveBaseline) {
+      widget.onHrvBaselineChanged?.call();
+    }
+  }
+
+  String get _hrvBaselineSubtitle {
+    final configuration = _hrvBaselineConfiguration;
+    if (configuration == null) {
+      return '正在读取 HRV 基线设置。';
+    }
+    if (configuration.isCustom) {
+      return '自定义 ${configuration.effectiveBaseline.toStringAsFixed(1)}ms；推荐值仍会随健康数据更新。';
+    }
+    if (configuration.hasEnoughPersonalData) {
+      return '自动使用个人推荐值 ${configuration.effectiveBaseline.toStringAsFixed(1)}ms。';
+    }
+    return '当前使用通用值 50ms；有效数据 ${configuration.validSampleCount}/${_HrvBaselineConfiguration.requiredSampleCount}。';
   }
 
   Future<void> _changeUserAvatar() async {
@@ -4602,8 +6283,15 @@ class _UserHomePageState extends State<UserHomePage> {
                 ),
                 const SizedBox(height: 10),
                 _SettingsActionTile(
+                  icon: Icons.tune_rounded,
+                  title: 'HRV 基线',
+                  subtitle: _hrvBaselineSubtitle,
+                  onTap: _configureHrvBaseline,
+                ),
+                const SizedBox(height: 10),
+                _SettingsActionTile(
                   icon: Icons.notifications_off_outlined,
-                  title: '静静含苞，不打扰休息',
+                  title: '花朵含苞',
                   subtitle:
                       '${_formatTime(_quietStartTime)} - ${_formatTime(_quietEndTime)} 之间不发送花时来信。',
                   onTap: _configureFlowerQuietWindow,
@@ -4641,6 +6329,221 @@ class _UserHomePageState extends State<UserHomePage> {
 
   static String _formatTime(TimeOfDay time) {
     return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+class _HrvBaselinePage extends StatefulWidget {
+  const _HrvBaselinePage();
+
+  @override
+  State<_HrvBaselinePage> createState() => _HrvBaselinePageState();
+}
+
+class _HrvBaselinePageState extends State<_HrvBaselinePage> {
+  final _customController = TextEditingController();
+  _HrvBaselineConfiguration? _configuration;
+  bool _useCustom = false;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _customController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final configuration = await _HrvBaselineManager.load();
+    if (!mounted) {
+      return;
+    }
+    _customController.text =
+        (configuration.customBaseline ??
+                configuration.recommendedBaseline ??
+                _HrvBaselineConfiguration.defaultBaseline)
+            .toStringAsFixed(1);
+    setState(() {
+      _configuration = configuration;
+      _useCustom = configuration.isCustom;
+    });
+  }
+
+  Future<void> _save() async {
+    double? customValue;
+    if (_useCustom) {
+      customValue = double.tryParse(_customController.text.trim());
+      if (customValue == null || customValue < 10 || customValue > 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('请输入 10–200ms 之间的 HRV 基线。')),
+        );
+        return;
+      }
+    }
+    setState(() => _isSaving = true);
+    await _HrvBaselineManager.setCustomBaseline(customValue);
+    if (!mounted) {
+      return;
+    }
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final configuration = _configuration;
+    final recommended = configuration?.recommendedBaseline;
+    final sampleCount = configuration?.validSampleCount ?? 0;
+    final requiredCount = _HrvBaselineConfiguration.requiredSampleCount;
+    final progress = (sampleCount / requiredCount).clamp(0.0, 1.0);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FFF4),
+      appBar: AppBar(
+        title: const Text('HRV 基线'),
+        backgroundColor: const Color(0xFFF8FFF4),
+        foregroundColor: const Color(0xFF24302A),
+        elevation: 0,
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE0ECE2)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '推荐 HRV 基线值',
+                    style: TextStyle(
+                      color: Color(0xFF60736C),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    recommended == null
+                        ? '-- ms'
+                        : '${recommended.toStringAsFixed(1)} ms',
+                    style: const TextStyle(
+                      color: Color(0xFF24302A),
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 7,
+                    borderRadius: BorderRadius.circular(4),
+                    color: const Color(0xFF5C9B72),
+                    backgroundColor: const Color(0xFFE5EFE7),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    sampleCount >= requiredCount
+                        ? '已获得足够数据，自动模式会使用个人推荐值。'
+                        : '有效 HRV 数据 $sampleCount/$requiredCount；达标前使用通用基线 50ms。',
+                    style: const TextStyle(
+                      color: Color(0xFF60736C),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              '基线模式',
+              style: TextStyle(
+                color: Color(0xFF24302A),
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment<bool>(
+                    value: false,
+                    icon: Icon(Icons.auto_awesome_outlined),
+                    label: Text('自动'),
+                  ),
+                  ButtonSegment<bool>(
+                    value: true,
+                    icon: Icon(Icons.tune_rounded),
+                    label: Text('自定义'),
+                  ),
+                ],
+                selected: {_useCustom},
+                onSelectionChanged: (selection) {
+                  setState(() => _useCustom = selection.first);
+                },
+              ),
+            ),
+            if (_useCustom) ...[
+              const SizedBox(height: 16),
+              TextField(
+                controller: _customController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                ],
+                decoration: const InputDecoration(
+                  labelText: '自定义 HRV 基线',
+                  suffixText: 'ms',
+                  helperText: '允许范围 10–200ms',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0F7F1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                _useCustom
+                    ? '保存后压力估算将使用你填写的基线，推荐值仍会继续更新。'
+                    : sampleCount >= requiredCount && recommended != null
+                    ? '当前将使用推荐值 ${recommended.toStringAsFixed(1)}ms。'
+                    : '当前将使用通用值 50ms，数据充足后会立即切换到推荐值。',
+                style: const TextStyle(
+                  color: Color(0xFF486358),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  height: 1.4,
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: _isSaving || configuration == null ? null : _save,
+              icon: const Icon(Icons.check_rounded),
+              label: Text(_isSaving ? '保存中' : '保存设置'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -5382,12 +7285,17 @@ class _HealthDataDashboardPageState extends State<HealthDataDashboardPage> {
         if (entry.heartRate != null)
           HealthChartPoint(entry.createdAt, entry.heartRate!),
       ],
+      restingHeartRateSamples:
+          _currentEstimate?.stats.restingHeartRateSamples ?? const [],
       hrvSamples: [
         ...?_currentEstimate?.stats.hrvSamples,
         if (entry.hrv != null) HealthChartPoint(entry.createdAt, entry.hrv!),
       ],
       sleepSamples: _currentEstimate?.stats.sleepSamples ?? const [],
       stepSamples: _currentEstimate?.stats.stepSamples ?? const [],
+      rawStepSamples: _currentEstimate?.stats.rawStepSamples ?? const [],
+      bodyTemperatureSamples:
+          _currentEstimate?.stats.bodyTemperatureSamples ?? const [],
       stressSamples: [
         ...?_currentEstimate?.stats.stressSamples,
         if (entry.wearableStress != null)
@@ -5396,9 +7304,15 @@ class _HealthDataDashboardPageState extends State<HealthDataDashboardPage> {
     );
     final calculation = stats.calculateStress(
       heartRateBaseline: _currentEstimate?.stats.averageRestingHeartRate,
-      hrvBaseline: _currentEstimate?.stats.averageHrv,
+      hrvBaseline:
+          _currentEstimate?.hrvBaseline ??
+          _HrvBaselineConfiguration.defaultBaseline,
       lastStress: _currentEstimate?.stressValue ?? 38,
       useHrv: useHrvForStress,
+      restingHeartRateBaseline: _currentEstimate?.stats
+          .medianRestingHeartRate(),
+      sleepBaselineMinutes: _currentEstimate?.stats.medianSleepMinutes(),
+      baselineDays: _currentEstimate?.stats.baselineDayCount ?? 0,
     );
     if (!mounted) {
       return;
@@ -5408,6 +7322,14 @@ class _HealthDataDashboardPageState extends State<HealthDataDashboardPage> {
         stressValue: calculation.stressValue,
         summary: '手动记录：${calculation.summary}',
         stats: stats,
+        hrvBaseline:
+            _currentEstimate?.hrvBaseline ??
+            _HrvBaselineConfiguration.defaultBaseline,
+        confidence: calculation.estimate.confidence,
+        mode: calculation.estimate.mode,
+        level: calculation.estimate.level,
+        isActivityFiltered: calculation.estimate.isActivityFiltered,
+        reason: calculation.estimate.reason,
       );
     });
   }
@@ -5994,6 +7916,8 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
           children: [
             _HealthMetricDetailHeader(metric: widget.metric),
             const SizedBox(height: 14),
+            _HealthMetricSummaryRow(metric: widget.metric),
+            const SizedBox(height: 14),
             _HealthSegmentPanel(
               title: '时间范围',
               child: SegmentedButton<_HealthMetricRange>(
@@ -6023,7 +7947,7 @@ class _HealthMetricDetailPageState extends State<_HealthMetricDetailPage> {
             ),
             const SizedBox(height: 14),
             Container(
-              height: 292,
+              height: 340,
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: Colors.white,
@@ -6228,13 +8152,29 @@ class _HealthMetricDetailHeader extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: Text(
-              metric.label,
-              style: const TextStyle(
-                color: Color(0xFF24302A),
-                fontSize: 18,
-                fontWeight: FontWeight.w900,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  metric.label,
+                  style: const TextStyle(
+                    color: Color(0xFF24302A),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  metric.samples.isEmpty
+                      ? '暂无更新时间'
+                      : '更新于 ${_HealthPointTooltip._formatTooltipTime(metric.samples.last.time)}',
+                  style: const TextStyle(
+                    color: Color(0xFF7B8A85),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
           ),
           Text(
@@ -6255,6 +8195,132 @@ class _HealthMetricDetailHeader extends StatelessWidget {
                 fontWeight: FontWeight.w700,
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HealthMetricSummaryRow extends StatelessWidget {
+  const _HealthMetricSummaryRow({required this.metric});
+
+  final _HealthMetric metric;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final monthAgo = now.subtract(const Duration(days: 30));
+    final todayAverage = _average([
+      for (final sample in metric.samples)
+        if (!sample.time.isBefore(today)) sample.value,
+    ]);
+    final monthAverage = _average([
+      for (final sample in metric.samples)
+        if (!sample.time.isBefore(monthAgo)) sample.value,
+    ]);
+    final isStress = metric.label == '压力值';
+
+    return Row(
+      children: [
+        Expanded(
+          child: _HealthMetricAverageCard(
+            title: isStress ? '当前压力' : '今日平均 ${metric.label}',
+            value: isStress ? metric.value : _format(todayAverage),
+            unit: metric.unit,
+            color: metric.color,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _HealthMetricAverageCard(
+            title: isStress ? '今日平均压力' : '近 30 日平均值',
+            value: _format(isStress ? todayAverage : monthAverage),
+            unit: metric.unit,
+            color: metric.color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  static double? _average(List<double> values) {
+    if (values.isEmpty) return null;
+    return values.reduce((a, b) => a + b) / values.length;
+  }
+
+  static String _format(double? value) {
+    if (value == null) return '--';
+    return value % 1 == 0 ? '${value.round()}' : value.toStringAsFixed(1);
+  }
+}
+
+class _HealthMetricAverageCard extends StatelessWidget {
+  const _HealthMetricAverageCard({
+    required this.title,
+    required this.value,
+    required this.unit,
+    required this.color,
+  });
+
+  final String title;
+  final String value;
+  final String unit;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 104,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.17)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF60736C),
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Flexible(
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 25,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 3),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: Text(
+                  unit,
+                  style: const TextStyle(
+                    color: Color(0xFF7B8A85),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -6342,6 +8408,7 @@ class _HealthTrendChartState extends State<_HealthTrendChart> {
                 size,
                 windowStart: widget.windowStart,
                 windowEnd: widget.windowEnd,
+                fixedPercentageScale: widget.metric.label == '压力值',
               )[selectedIndex];
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -6351,6 +8418,7 @@ class _HealthTrendChartState extends State<_HealthTrendChart> {
               size,
               windowStart: widget.windowStart,
               windowEnd: widget.windowEnd,
+              fixedPercentageScale: widget.metric.label == '压力值',
             );
             if (offsets.isEmpty) {
               return;
@@ -6373,6 +8441,7 @@ class _HealthTrendChartState extends State<_HealthTrendChart> {
                 painter: _HealthTrendChartPainter(
                   samples: samples,
                   color: widget.metric.color,
+                  useBars: false,
                   selectedIndex: selectedIndex,
                   windowStart: widget.windowStart,
                   windowEnd: widget.windowEnd,
@@ -6470,6 +8539,7 @@ class _HealthTrendChartPainter extends CustomPainter {
   const _HealthTrendChartPainter({
     required this.samples,
     required this.color,
+    required this.useBars,
     required this.selectedIndex,
     this.windowStart,
     this.windowEnd,
@@ -6477,6 +8547,7 @@ class _HealthTrendChartPainter extends CustomPainter {
 
   final List<HealthChartPoint> samples;
   final Color color;
+  final bool useBars;
   final int? selectedIndex;
   final DateTime? windowStart;
   final DateTime? windowEnd;
@@ -6500,42 +8571,61 @@ class _HealthTrendChartPainter extends CustomPainter {
       size,
       windowStart: windowStart,
       windowEnd: windowEnd,
+      fixedPercentageScale: useBars,
     );
 
-    final fillPath = Path()..moveTo(0, size.height);
-    final linePath = Path();
-    for (var i = 0; i < offsets.length; i++) {
-      final point = offsets[i];
-      if (i == 0) {
-        linePath.moveTo(point.dx, point.dy);
-        fillPath.lineTo(point.dx, point.dy);
-      } else {
-        linePath.lineTo(point.dx, point.dy);
-        fillPath.lineTo(point.dx, point.dy);
-      }
-    }
-    fillPath
-      ..lineTo(size.width, size.height)
-      ..close();
-
-    final fillPaint = Paint()
-      ..shader = ui.Gradient.linear(Offset.zero, Offset(0, size.height), [
-        color.withValues(alpha: 0.28),
-        color.withValues(alpha: 0.02),
-      ]);
-    canvas.drawPath(fillPath, fillPaint);
-
-    final linePaint = Paint()
-      ..color = color
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    canvas.drawPath(linePath, linePaint);
-
     final dotPaint = Paint()..color = color;
-    for (var i = 0; i < samples.length; i++) {
-      canvas.drawCircle(offsets[i], 3.5, dotPaint);
+    if (useBars) {
+      final barWidth = (size.width / (samples.length * 1.65)).clamp(3.0, 16.0);
+      for (var i = 0; i < samples.length; i++) {
+        final point = offsets[i];
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTRB(
+              point.dx - barWidth / 2,
+              point.dy,
+              point.dx + barWidth / 2,
+              size.height,
+            ),
+            const Radius.circular(3),
+          ),
+          dotPaint,
+        );
+      }
+    } else {
+      final fillPath = Path()..moveTo(0, size.height);
+      final linePath = Path();
+      for (var i = 0; i < offsets.length; i++) {
+        final point = offsets[i];
+        if (i == 0) {
+          linePath.moveTo(point.dx, point.dy);
+          fillPath.lineTo(point.dx, point.dy);
+        } else {
+          linePath.lineTo(point.dx, point.dy);
+          fillPath.lineTo(point.dx, point.dy);
+        }
+      }
+      fillPath
+        ..lineTo(size.width, size.height)
+        ..close();
+
+      final fillPaint = Paint()
+        ..shader = ui.Gradient.linear(Offset.zero, Offset(0, size.height), [
+          color.withValues(alpha: 0.22),
+          color.withValues(alpha: 0.01),
+        ]);
+      canvas.drawPath(fillPath, fillPaint);
+
+      final linePaint = Paint()
+        ..color = color
+        ..strokeWidth = 3
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      canvas.drawPath(linePath, linePaint);
+      for (var i = 0; i < samples.length; i++) {
+        canvas.drawCircle(offsets[i], 3.5, dotPaint);
+      }
     }
 
     if (selectedIndex != null && selectedIndex! < offsets.length) {
@@ -6558,13 +8648,18 @@ class _HealthTrendChartPainter extends CustomPainter {
     Size size, {
     DateTime? windowStart,
     DateTime? windowEnd,
+    bool fixedPercentageScale = false,
   }) {
     if (samples.isEmpty || size.width <= 0 || size.height <= 0) {
       return const [];
     }
     final values = [for (final sample in samples) sample.value];
-    final minValue = values.reduce((a, b) => a < b ? a : b);
-    final maxValue = values.reduce((a, b) => a > b ? a : b);
+    final minValue = fixedPercentageScale
+        ? 0.0
+        : values.reduce((a, b) => a < b ? a : b);
+    final maxValue = fixedPercentageScale
+        ? 100.0
+        : values.reduce((a, b) => a > b ? a : b);
     final range = (maxValue - minValue).abs() < 0.01
         ? 1.0
         : maxValue - minValue;
@@ -6592,9 +8687,105 @@ class _HealthTrendChartPainter extends CustomPainter {
   bool shouldRepaint(covariant _HealthTrendChartPainter oldDelegate) {
     return oldDelegate.samples != samples ||
         oldDelegate.color != color ||
+        oldDelegate.useBars != useBars ||
         oldDelegate.selectedIndex != selectedIndex ||
         oldDelegate.windowStart != windowStart ||
         oldDelegate.windowEnd != windowEnd;
+  }
+}
+
+class FlowerLetterDraft {
+  const FlowerLetterDraft({
+    required this.event,
+    required this.message,
+    required this.scheduledAt,
+  });
+
+  final String event;
+  final String message;
+  final DateTime scheduledAt;
+
+  FlowerLetterDraft copyWith({String? message, DateTime? scheduledAt}) {
+    return FlowerLetterDraft(
+      event: event,
+      message: message ?? this.message,
+      scheduledAt: scheduledAt ?? this.scheduledAt,
+    );
+  }
+}
+
+class FlowerLetterIntentParser {
+  const FlowerLetterIntentParser._();
+
+  static FlowerLetterDraft? parse(String text, {DateTime? now}) {
+    final content = text.trim();
+    if (content.isEmpty) return null;
+    final hasFutureIntent = RegExp(
+      r'提醒我|别忘|记得|明天|后天|今晚|下周|早上|上午|中午|下午|晚上|\d{1,2}[点时:：]',
+    ).hasMatch(content);
+    if (!hasFutureIntent) return null;
+
+    final current = now ?? DateTime.now();
+    var dayOffset = content.contains('后天')
+        ? 2
+        : content.contains('明天')
+        ? 1
+        : content.contains('下周')
+        ? 7
+        : 0;
+    var hour = content.contains('今晚') || content.contains('晚上')
+        ? 21
+        : content.contains('中午')
+        ? 12
+        : content.contains('下午')
+        ? 15
+        : content.contains('早上') || content.contains('上午')
+        ? 9
+        : current.add(const Duration(hours: 1)).hour;
+    var minute = 0;
+    final timeMatch = RegExp(
+      r'(\d{1,2})(?:点|时|:|：)(\d{1,2})?',
+    ).firstMatch(content);
+    if (timeMatch != null) {
+      hour = int.tryParse(timeMatch.group(1) ?? '') ?? hour;
+      minute = int.tryParse(timeMatch.group(2) ?? '') ?? 0;
+      if (content.contains('下午') && hour < 12) hour += 12;
+      if ((content.contains('晚上') || content.contains('今晚')) && hour < 12) {
+        hour += 12;
+      }
+    }
+    hour = hour.clamp(0, 23);
+    minute = minute.clamp(0, 59);
+    var day = DateTime(
+      current.year,
+      current.month,
+      current.day,
+    ).add(Duration(days: dayOffset));
+    var scheduledAt = DateTime(day.year, day.month, day.day, hour, minute);
+    if (!scheduledAt.isAfter(current)) {
+      dayOffset += 1;
+      day = DateTime(
+        current.year,
+        current.month,
+        current.day,
+      ).add(Duration(days: dayOffset));
+      scheduledAt = DateTime(day.year, day.month, day.day, hour, minute);
+    }
+
+    var event = content
+        .replaceAll(RegExp(r'提醒我|别忘了?|记得|请|麻烦'), '')
+        .replaceAll(RegExp(r'明天|后天|今晚|下周[一二三四五六日天]?'), '')
+        .replaceAll(RegExp(r'早上|上午|中午|下午|晚上'), '')
+        .replaceAll(RegExp(r'\d{1,2}(?:点|时|:|：)\d{0,2}'), '')
+        .replaceAll(RegExp(r'[，。！？,.!?]'), ' ')
+        .trim();
+    if (event.isEmpty) event = '那件想记住的小事';
+    if (event.length > 16) event = event.substring(0, 16);
+    return FlowerLetterDraft(
+      event: event,
+      message: '到了约定的时间。关于“$event”，先从眼前最小的一步开始。',
+      scheduledAt: scheduledAt,
+    );
   }
 }
 
@@ -6605,12 +8796,18 @@ class DeepSeekChatPage extends StatefulWidget {
     this.initialGardenMood,
     this.initialGardenFlowerName,
     this.initialGardenReply,
+    this.initialFlowerLetterId,
+    this.initialFlowerLetterMessage,
+    this.initialReminderDraft,
   });
 
   final String? initialGardenRecordId;
   final String? initialGardenMood;
   final String? initialGardenFlowerName;
   final String? initialGardenReply;
+  final String? initialFlowerLetterId;
+  final String? initialFlowerLetterMessage;
+  final FlowerLetterDraft? initialReminderDraft;
 
   @override
   State<DeepSeekChatPage> createState() => _DeepSeekChatPageState();
@@ -6647,6 +8844,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
   String? _userDisplayName;
   bool _isSending = false;
   bool _isLoadingHistory = true;
+  FlowerLetterDraft? _pendingReminderDraft;
 
   bool get _isConfigured => _apiKey.isNotEmpty && _apiUrl.isNotEmpty;
   String? _activeConversationId;
@@ -6659,6 +8857,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
       model: _model,
       apiUrl: _apiUrl,
     );
+    _pendingReminderDraft = widget.initialReminderDraft;
     _loadChatHistory();
   }
 
@@ -6700,6 +8899,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
         _messages.add(_ChatMessage(role: _ChatRole.assistant, content: reply));
       });
       await _saveChatHistory();
+      await _suggestReminderFromConversation(content, reply);
     } on _DeepSeekChatException catch (error) {
       if (!mounted) {
         return;
@@ -6731,6 +8931,137 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
         setState(() => _isSending = false);
         _scrollToBottom();
       }
+    }
+  }
+
+  Future<void> _suggestReminderFromConversation(
+    String userMessage,
+    String assistantReply,
+  ) async {
+    var localDraft = FlowerLetterIntentParser.parse(userMessage);
+    if (localDraft == null || !mounted) return;
+    localDraft = await _normalizeDraftForQuietWindow(localDraft);
+    setState(() => _pendingReminderDraft = localDraft);
+    try {
+      final refined = await _client.refineReminderDraft(
+        draft: localDraft,
+        userMessage: userMessage,
+        assistantReply: assistantReply,
+      );
+      if (mounted && _pendingReminderDraft == localDraft) {
+        setState(() => _pendingReminderDraft = refined);
+      }
+    } catch (_) {
+      // The deterministic local draft remains available when AI refinement fails.
+    }
+    _scrollToBottom();
+  }
+
+  Future<void> _acceptReminderDraft() async {
+    final pendingDraft = _pendingReminderDraft;
+    if (pendingDraft == null) return;
+    final draft = await _normalizeDraftForQuietWindow(pendingDraft);
+    final wasShifted = draft.scheduledAt != pendingDraft.scheduledAt;
+    final reminder = _FlowerReminder(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      event: draft.event,
+      category: '灯塔对话',
+      subcategory: '未来约定',
+      message: draft.message,
+      frequency: '仅一次',
+      weekdays: const [],
+      hour: draft.scheduledAt.hour,
+      minute: draft.scheduledAt.minute,
+      createdAt: DateTime.now(),
+      source: 'chat',
+      scheduledAt: draft.scheduledAt,
+    );
+    final reminders = await _loadStoredFlowerReminders();
+    await _saveStoredFlowerReminders([reminder, ...reminders]);
+    await _FlowerNotificationService.scheduleReminder(reminder);
+    if (!mounted) return;
+    setState(() => _pendingReminderDraft = null);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(wasShifted ? '这封来信已收好，并顺延到勿扰时段结束后送达。' : '这封来信已经收好。'),
+      ),
+    );
+  }
+
+  Future<void> _editReminderDraft() async {
+    final draft = _pendingReminderDraft;
+    if (draft == null) return;
+    final controller = TextEditingController(text: draft.message);
+    var scheduledAt = draft.scheduledAt;
+    final edited = await showDialog<FlowerLetterDraft>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('改一改这封信'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                maxLines: 3,
+                decoration: const InputDecoration(labelText: '来信内容'),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.schedule_outlined),
+                title: const Text('送达时间'),
+                subtitle: Text(_formatFullDateTime(scheduledAt)),
+                onTap: () async {
+                  final date = await showDatePicker(
+                    context: context,
+                    initialDate: scheduledAt,
+                    firstDate: DateTime.now(),
+                    lastDate: DateTime.now().add(const Duration(days: 365)),
+                  );
+                  if (date == null || !context.mounted) return;
+                  final time = await showTimePicker(
+                    context: context,
+                    initialTime: TimeOfDay.fromDateTime(scheduledAt),
+                  );
+                  if (time == null) return;
+                  setDialogState(() {
+                    scheduledAt = DateTime(
+                      date.year,
+                      date.month,
+                      date.day,
+                      time.hour,
+                      time.minute,
+                    );
+                  });
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final message = controller.text.trim();
+                if (message.isEmpty || !scheduledAt.isAfter(DateTime.now())) {
+                  return;
+                }
+                Navigator.of(dialogContext).pop(
+                  draft.copyWith(message: message, scheduledAt: scheduledAt),
+                );
+              },
+              child: const Text('保存修改'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    if (edited != null && mounted) {
+      setState(() => _pendingReminderDraft = edited);
     }
   }
 
@@ -6818,6 +9149,23 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
   }
 
   List<_ChatMessage>? _initialGardenMessages() {
+    final letterId = widget.initialFlowerLetterId;
+    final letterMessage = widget.initialFlowerLetterMessage?.trim();
+    if (letterId != null &&
+        letterId.isNotEmpty &&
+        letterMessage != null &&
+        letterMessage.isNotEmpty) {
+      return [
+        _ChatMessage(
+          role: _ChatRole.user,
+          content: '我收到了一封花时来信：\n$letterMessage',
+        ),
+        const _ChatMessage(
+          role: _ChatRole.assistant,
+          content: '我在。读到这封信时，你心里有什么变化？',
+        ),
+      ];
+    }
     final recordId = widget.initialGardenRecordId;
     final mood = widget.initialGardenMood?.trim();
     final flowerName = widget.initialGardenFlowerName?.trim();
@@ -6914,6 +9262,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
     _controller.clear();
     setState(() {
       _isSending = false;
+      _pendingReminderDraft = null;
       _activeConversationId = nextConversation.id;
       _conversations.insert(0, nextConversation);
       _messages
@@ -6950,6 +9299,7 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
     _controller.clear();
     setState(() {
       _isSending = false;
+      _pendingReminderDraft = null;
       _activeConversationId = conversation.id;
       _messages
         ..clear()
@@ -7224,6 +9574,13 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
                       itemCount: _messages.length,
                     ),
             ),
+            if (_pendingReminderDraft != null)
+              _ConversationReminderDraftCard(
+                draft: _pendingReminderDraft!,
+                onAccept: _acceptReminderDraft,
+                onEdit: _editReminderDraft,
+                onDismiss: () => setState(() => _pendingReminderDraft = null),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
               child: Row(
@@ -7281,6 +9638,120 @@ class _DeepSeekChatPageState extends State<DeepSeekChatPage> {
       ),
     );
   }
+}
+
+class _ConversationReminderDraftCard extends StatelessWidget {
+  const _ConversationReminderDraftCard({
+    required this.draft,
+    required this.onAccept,
+    required this.onEdit,
+    required this.onDismiss,
+  });
+
+  final FlowerLetterDraft draft;
+  final VoidCallback onAccept;
+  final VoidCallback onEdit;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F8ED),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFCFE5D1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.mark_email_unread_outlined,
+                color: Color(0xFF5C9B72),
+                size: 20,
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '要让灯塔在那个时候带着这句话回来吗？',
+                  style: TextStyle(
+                    color: Color(0xFF294A38),
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Text(
+            draft.message,
+            style: const TextStyle(
+              color: Color(0xFF405E50),
+              height: 1.4,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _formatFullDateTime(draft.scheduledAt),
+            style: const TextStyle(
+              color: Color(0xFF64806F),
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilledButton(onPressed: onAccept, child: const Text('收下这封信')),
+              OutlinedButton(onPressed: onEdit, child: const Text('改一改')),
+              TextButton(onPressed: onDismiss, child: const Text('不用了')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatFullDateTime(DateTime value) {
+  final minute = value.minute.toString().padLeft(2, '0');
+  return '${value.month}月${value.day}日 '
+      '${value.hour.toString().padLeft(2, '0')}:$minute';
+}
+
+Future<FlowerLetterDraft> _normalizeDraftForQuietWindow(
+  FlowerLetterDraft draft,
+) async {
+  final quiet = await _FlowerNotificationService.quietWindow();
+  final date = draft.scheduledAt;
+  final minuteOfDay = date.hour * 60 + date.minute;
+  if (!_FlowerNotificationService._isQuietTime(minuteOfDay, quiet)) {
+    return draft;
+  }
+  final endHour = quiet.end ~/ 60;
+  final endMinute = quiet.end % 60;
+  final crossesMidnight = quiet.start > quiet.end;
+  final shouldUseNextDay = crossesMidnight && minuteOfDay >= quiet.start;
+  final baseDay = shouldUseNextDay
+      ? DateTime(date.year, date.month, date.day).add(const Duration(days: 1))
+      : DateTime(date.year, date.month, date.day);
+  var adjusted = DateTime(
+    baseDay.year,
+    baseDay.month,
+    baseDay.day,
+    endHour,
+    endMinute,
+  );
+  if (!adjusted.isAfter(DateTime.now())) {
+    adjusted = adjusted.add(const Duration(days: 1));
+  }
+  return draft.copyWith(scheduledAt: adjusted);
 }
 
 enum _ChatRole { user, assistant }
@@ -7640,6 +10111,63 @@ class _DeepSeekChatClient {
     ].join('\n\n');
 
     return _sendWorkerRequest(message: '请给这次选择写一句灯塔回信。', context: contextText);
+  }
+
+  Future<List<String>> flowerLetterOptions({
+    required List<_GardenSelectionRecord> recentHistory,
+  }) async {
+    final historyText = recentHistory
+        .take(3)
+        .map(
+          (record) =>
+              '${_formatMonthDayTime(record.createdAt)} ${record.mood}·${record.flowerName}：${record.message}',
+        )
+        .join('\n');
+    final response = await _sendWorkerRequest(
+      message: '请为用户写三封可以在未来收到的花时来信。',
+      context: [
+        '场景：花时来信文案候选',
+        '只输出三行中文，每行一封，不要编号；每封不超过45字。',
+        '语气温柔、具体、克制，不诊断，不说教，不使用“你应该”或“你最好”。',
+        if (historyText.isNotEmpty) '最近三次花园记录：\n$historyText',
+      ].join('\n\n'),
+    );
+    final options = response
+        .split(RegExp(r'[\r\n]+'))
+        .map(
+          (line) =>
+              line.replaceFirst(RegExp(r'^\s*[1-3一二三][.、)]\s*'), '').trim(),
+        )
+        .where((line) => line.isNotEmpty)
+        .take(3)
+        .toList();
+    return options.length >= 2
+        ? options
+        : _localFlowerLetterOptions(recentHistory);
+  }
+
+  Future<FlowerLetterDraft> refineReminderDraft({
+    required FlowerLetterDraft draft,
+    required String userMessage,
+    required String assistantReply,
+  }) async {
+    final response = await _sendWorkerRequest(
+      message: '请把这条未来提醒改写成一封简短的花时来信。',
+      context: [
+        '只输出一段中文，不超过45字，不要标题、编号或引号。',
+        '保留具体任务，不增加用户没有说过的事实；温柔、克制、可行动。',
+        '不要诊断，不使用“你应该”或“你最好”。',
+        '用户原话：$userMessage',
+        '灯塔刚才的回复：$assistantReply',
+        '本地草稿：${draft.message}',
+      ].join('\n\n'),
+    );
+    final message = response.trim().replaceAll(
+      RegExp(r'^[“”"\s]+|[“”"\s]+$'),
+      '',
+    );
+    if (message.isEmpty || message.length > 90) return draft;
+    return draft.copyWith(message: message);
   }
 
   Future<String> onboardingReply({required String userProfileContext}) async {
@@ -8298,6 +10826,20 @@ class _MyGardenPageState extends State<MyGardenPage> {
     );
   }
 
+  void _sendGardenLetter(_GardenSelectionRecord record) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => FlowerReminderPage(
+          initialGardenFlowerName: record.flowerName,
+          initialGardenMood: record.mood,
+          initialGardenMessage: record.message.trim().isEmpty
+              ? record.meaning
+              : record.message,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -8312,6 +10854,49 @@ class _MyGardenPageState extends State<MyGardenPage> {
         child: CustomScrollView(
           slivers: [
             SliverToBoxAdapter(
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(18, 12, 18, 0),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF6EC),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFD5E9D9)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.spa_outlined, color: Color(0xFF5C9B72)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            '选花 → 读回信 → 有需要再聊',
+                            style: TextStyle(
+                              color: Color(0xFF24302A),
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _history.isEmpty
+                                ? '不用写很多，先选一朵最像此刻的花。'
+                                : '花园已收下 ${_history.length} 次心情，慢慢看见自己的变化。',
+                            style: const TextStyle(
+                              color: Color(0xFF587171),
+                              height: 1.35,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
                 child: _SelectedFlowerCard(
@@ -8322,6 +10907,9 @@ class _MyGardenPageState extends State<MyGardenPage> {
                   onOpenLatestRecord: _history.isEmpty
                       ? null
                       : () => _openGardenChat(_history.first),
+                  onSendLatestRecord: _history.isEmpty
+                      ? null
+                      : () => _sendGardenLetter(_history.first),
                 ),
               ),
             ),
@@ -8430,6 +11018,7 @@ class _SelectedFlowerCard extends StatelessWidget {
     required this.latestRecord,
     required this.isGeneratingMessage,
     required this.onOpenLatestRecord,
+    required this.onSendLatestRecord,
   });
 
   final _GardenFlower? flower;
@@ -8437,6 +11026,7 @@ class _SelectedFlowerCard extends StatelessWidget {
   final _GardenSelectionRecord? latestRecord;
   final bool isGeneratingMessage;
   final VoidCallback? onOpenLatestRecord;
+  final VoidCallback? onSendLatestRecord;
 
   @override
   Widget build(BuildContext context) {
@@ -8533,6 +11123,15 @@ class _SelectedFlowerCard extends StatelessWidget {
                   ? latestRecord!.message
                   : _localGardenReflection(flower!),
               onTap: onOpenLatestRecord,
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onSendLatestRecord,
+                icon: const Icon(Icons.mark_email_unread_outlined),
+                label: const Text('把这朵花寄给未来的我'),
+              ),
             ),
           ],
         ],
@@ -8739,6 +11338,24 @@ class _GardenFlowerTile extends StatelessWidget {
 
 String _localGardenReflection(_GardenFlower flower) {
   return '灯塔收下了这朵${flower.name}。${flower.meaning}';
+}
+
+List<String> _localFlowerLetterOptions(
+  List<_GardenSelectionRecord> recentHistory,
+) {
+  if (recentHistory.isEmpty) {
+    return const [
+      '给此刻的自己留一点余地。花会慢慢开，你也可以慢慢来。',
+      '如果今天有些累，就先在这里靠岸一会儿。',
+      '记得看看窗外，也看看正在认真生活的自己。',
+    ];
+  }
+  final latest = recentHistory.first;
+  return [
+    '你曾把${latest.mood}种成一朵${latest.flowerName}。现在的风，有没有轻一点？',
+    '那天的${latest.flowerName}还在花园里。今天也不用急着把一切整理好。',
+    '灯塔记得你那天的${latest.mood}。先照顾好眼前这一小步，就已经很好。',
+  ];
 }
 
 String _formatMonthDayTime(DateTime value) {
@@ -9380,6 +11997,69 @@ class _SupportCard extends StatelessWidget {
   }
 }
 
+class NotificationRecoveryAdvicePage extends StatefulWidget {
+  const NotificationRecoveryAdvicePage({
+    super.key,
+    required this.stressValue,
+    required this.transitionMessage,
+  });
+
+  final int stressValue;
+  final String transitionMessage;
+
+  @override
+  State<NotificationRecoveryAdvicePage> createState() =>
+      _NotificationRecoveryAdvicePageState();
+}
+
+class _NotificationRecoveryAdvicePageState
+    extends State<NotificationRecoveryAdvicePage> {
+  late String _suggestion = widget.transitionMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_generateAiSuggestion());
+  }
+
+  Future<void> _generateAiSuggestion() async {
+    if (_homeDeepSeekApiKey.isEmpty ||
+        _homeDeepSeekApiUrl.isEmpty ||
+        WidgetsBinding.instance.runtimeType.toString().contains('Test')) {
+      return;
+    }
+    final profile = StressProfile.fromValue(widget.stressValue.toDouble());
+    try {
+      final suggestion =
+          await _DeepSeekChatClient(
+            apiKey: _homeDeepSeekApiKey,
+            model: _homeDeepSeekModel,
+            apiUrl: _homeDeepSeekApiUrl,
+          ).supportSuggestion(
+            stressValue: widget.stressValue,
+            stressLabel: profile.label,
+            fallbackSuggestion: widget.transitionMessage,
+            recentChat: '',
+          );
+      if (mounted && suggestion.trim().isNotEmpty) {
+        setState(() => _suggestion = suggestion.trim());
+      }
+    } catch (_) {
+      // Keep the transition-specific local suggestion when AI is unavailable.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = StressProfile.fromValue(widget.stressValue.toDouble());
+    return RecoveryAdvicePage(
+      profile: profile,
+      stressValue: widget.stressValue,
+      generatedSuggestion: _suggestion,
+    );
+  }
+}
+
 class RecoveryAdvicePage extends StatelessWidget {
   const RecoveryAdvicePage({
     super.key,
@@ -9730,9 +12410,9 @@ class StressProfile {
   final IconData icon;
 
   static StressProfile fromValue(double value) {
-    if (value < 35) {
+    if (value < 25) {
       return const StressProfile(
-        label: '平稳放松',
+        label: '平稳',
         suggestion: '保持当前节奏，做一次 4 分钟轻呼吸，让身体继续停在舒服区间。',
         baseColor: Color(0xFFF7FFF8),
         hazeColor: Color(0xFFD7F4DB),
@@ -9742,9 +12422,9 @@ class StressProfile {
         icon: Icons.spa_outlined,
       );
     }
-    if (value < 55) {
+    if (value < 50) {
       return const StressProfile(
-        label: '轻微紧绷',
+        label: '略有波动',
         suggestion: '离开屏幕半分钟，喝水并放慢呼吸，先把注意力带回身体。',
         baseColor: Color(0xFFFFFCF4),
         hazeColor: Color(0xFFEAD4A6),
@@ -9756,7 +12436,7 @@ class StressProfile {
     }
     if (value < 75) {
       return const StressProfile(
-        label: '压力偏高',
+        label: '有些紧绷',
         suggestion: '暂停当前任务，试一次 4-7-8 呼吸；如果可以，站起来慢走 3 分钟。',
         baseColor: Color(0xFFFFF8F6),
         hazeColor: Color(0xFFFFC7BC),
@@ -9767,7 +12447,7 @@ class StressProfile {
       );
     }
     return const StressProfile(
-      label: '需要恢复',
+      label: '明显紧绷',
       suggestion: '先降低刺激源：摘下耳机、远离通知，给自己 10 分钟完整休息。',
       baseColor: Color(0xFFFFF7F6),
       hazeColor: Color(0xFFFFB7B0),
@@ -9783,6 +12463,16 @@ class HealthStressEstimator {
   const HealthStressEstimator();
 
   static const samples = [
+    HealthStressSample(
+      label: '跨设备联调 Mock',
+      averageHeartRate: 74,
+      averageRestingHeartRate: 62,
+      averageHrv: 48,
+      hrvBaseline: 62,
+      steps: 6280,
+      sleepMinutes: 438,
+      includesTimeline: true,
+    ),
     HealthStressSample(
       label: '平稳放松',
       averageHeartRate: 62,
@@ -9830,6 +12520,7 @@ class HealthStressEstimator {
     HealthDataType.SLEEP_DEEP,
     HealthDataType.SLEEP_LIGHT,
     HealthDataType.SLEEP_REM,
+    HealthDataType.BODY_TEMPERATURE,
   ];
 
   Future<HealthStressEstimate> estimate({required double lastStress}) async {
@@ -9880,7 +12571,7 @@ class HealthStressEstimator {
     final weekStart = today.subtract(Duration(days: today.weekday - 1));
     final start = monthStart.isBefore(weekStart) ? monthStart : weekStart;
     final recentStart = now.subtract(const Duration(hours: 24));
-    final baselineStart = start.subtract(const Duration(days: 30));
+    final baselineStart = now.subtract(const Duration(days: 14));
     final data = await health.getHealthDataFromTypes(
       types: availableTypes,
       startTime: start,
@@ -9889,7 +12580,7 @@ class HealthStressEstimator {
     final baselineData = await health.getHealthDataFromTypes(
       types: availableTypes,
       startTime: baselineStart,
-      endTime: recentStart,
+      endTime: now,
     );
 
     final stats = HealthStressStats.fromData(data);
@@ -9916,9 +12607,41 @@ class HealthStressEstimator {
         );
       }
     }
-    final heartRateBaseline =
-        baselineStats.averageRestingHeartRate ?? baselineStats.averageHeartRate;
-    final hrvBaseline = baselineStats.averageHrv;
+    final heartRateBaseline = baselineStats.heartRateBaselineFor(now);
+    final restingHeartRateBaseline = baselineStats.medianRestingHeartRate();
+    final sleepBaselineMinutes = baselineStats.medianSleepMinutes();
+    final bodyTemperatureBaseline = baselineStats.medianBodyTemperature();
+    final baselineDays = baselineStats.baselineDayCount;
+    final personalHrvBySecond = <int, double>{};
+    for (final sample in baselineStats.hrvSamples) {
+      if (sample.value >= 10 && sample.value <= 200) {
+        personalHrvBySecond[sample.time.millisecondsSinceEpoch ~/ 1000] =
+            sample.value;
+      }
+    }
+    for (final entry in manualEntries) {
+      final value = entry.hrv;
+      if (value != null &&
+          value >= 10 &&
+          value <= 200 &&
+          !entry.createdAt.isBefore(baselineStart)) {
+        personalHrvBySecond[entry.createdAt.millisecondsSinceEpoch ~/ 1000] =
+            value;
+      }
+    }
+    final personalHrvValues = personalHrvBySecond.values.toList()..sort();
+    final recommendedHrvBaseline = personalHrvValues.isEmpty
+        ? null
+        : personalHrvValues.length.isOdd
+        ? personalHrvValues[personalHrvValues.length ~/ 2]
+        : (personalHrvValues[personalHrvValues.length ~/ 2 - 1] +
+                  personalHrvValues[personalHrvValues.length ~/ 2]) /
+              2;
+    final baselineConfiguration = await _HrvBaselineManager.load(
+      recommendedBaseline: recommendedHrvBaseline,
+      validSampleCount: personalHrvValues.length,
+    );
+    final hrvBaseline = baselineConfiguration.effectiveBaseline;
     final calculationStats = recentMergedStats.hasAnySignal
         ? recentMergedStats
         : mergedStats;
@@ -9927,18 +12650,32 @@ class HealthStressEstimator {
       hrvBaseline: hrvBaseline,
       lastStress: lastStress,
       useHrv: useHrvForStress,
+      restingHeartRateBaseline: restingHeartRateBaseline,
+      sleepBaselineMinutes: sleepBaselineMinutes,
+      bodyTemperatureBaseline: bodyTemperatureBaseline,
+      baselineDays: baselineDays,
+      now: now,
     );
     final chartStats = mergedStats.withStressSamples(
       heartRateBaseline: heartRateBaseline,
       hrvBaseline: hrvBaseline,
       lastStress: lastStress,
       useHrv: useHrvForStress,
+      restingHeartRateBaseline: restingHeartRateBaseline,
+      sleepBaselineMinutes: sleepBaselineMinutes,
     );
 
     return HealthStressEstimate(
       stressValue: result.stressValue,
-      summary: result.summary,
+      summary:
+          '${result.summary} · ${_hrvBaselineSummary(baselineConfiguration)}',
       stats: chartStats,
+      hrvBaseline: hrvBaseline,
+      confidence: result.estimate.confidence,
+      mode: result.estimate.mode,
+      level: result.estimate.level,
+      isActivityFiltered: result.estimate.isActivityFiltered,
+      reason: result.estimate.reason,
     );
   }
 
@@ -9946,23 +12683,122 @@ class HealthStressEstimator {
     HealthStressSample sample, {
     double lastStress = 38,
   }) {
-    final stats = HealthStressStats(
-      averageHeartRate: sample.averageHeartRate,
-      averageRestingHeartRate: sample.averageRestingHeartRate,
-      averageHrv: sample.averageHrv,
-      steps: sample.steps,
-      sleepMinutes: sample.sleepMinutes,
-    );
+    final stats = sample.includesTimeline
+        ? _timelineStatsForSample(sample)
+        : HealthStressStats(
+            averageHeartRate: sample.averageHeartRate,
+            averageRestingHeartRate: sample.averageRestingHeartRate,
+            averageHrv: sample.averageHrv,
+            steps: sample.steps,
+            sleepMinutes: sample.sleepMinutes,
+          );
     final result = stats.calculateStress(
       heartRateBaseline: sample.averageRestingHeartRate,
       hrvBaseline: sample.hrvBaseline,
       lastStress: lastStress,
       useHrv: true,
+      restingHeartRateBaseline: sample.averageRestingHeartRate,
+      sleepBaselineMinutes: sample.sleepMinutes,
+      baselineDays: 14,
+    );
+    final chartStats = stats.withStressSamples(
+      heartRateBaseline: sample.averageRestingHeartRate,
+      hrvBaseline: sample.hrvBaseline,
+      lastStress: lastStress,
+      useHrv: true,
+      restingHeartRateBaseline: sample.averageRestingHeartRate,
+      sleepBaselineMinutes: sample.sleepMinutes,
     );
     return HealthStressEstimate(
       stressValue: result.stressValue,
       summary: '测试数据 · ${sample.label}：${result.summary}',
-      stats: stats,
+      stats: chartStats,
+      hrvBaseline: sample.hrvBaseline,
+      confidence: result.estimate.confidence,
+      mode: result.estimate.mode,
+      level: result.estimate.level,
+      isActivityFiltered: result.estimate.isActivityFiltered,
+      reason: result.estimate.reason,
+    );
+  }
+
+  static String _hrvBaselineSummary(_HrvBaselineConfiguration configuration) {
+    if (configuration.isCustom) {
+      return '自定义 HRV 基线 ${configuration.effectiveBaseline.toStringAsFixed(1)}ms';
+    }
+    if (configuration.hasEnoughPersonalData) {
+      return '个人 HRV 基线 ${configuration.effectiveBaseline.toStringAsFixed(1)}ms';
+    }
+    return '通用 HRV 基线 50ms（${configuration.validSampleCount}/${_HrvBaselineConfiguration.requiredSampleCount}）';
+  }
+
+  HealthStressStats _timelineStatsForSample(HealthStressSample sample) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    List<HealthChartPoint> timedValues(
+      List<(int, int, double)> values,
+      double currentValue,
+    ) {
+      final points = <HealthChartPoint>[
+        for (final value in values)
+          if (today
+              .add(Duration(hours: value.$1, minutes: value.$2))
+              .isBefore(now.subtract(const Duration(minutes: 20))))
+            HealthChartPoint(
+              today.add(Duration(hours: value.$1, minutes: value.$2)),
+              value.$3,
+            ),
+        HealthChartPoint(now, currentValue),
+      ];
+      return points;
+    }
+
+    return HealthStressStats(
+      averageHeartRate: sample.averageHeartRate,
+      averageRestingHeartRate: sample.averageRestingHeartRate,
+      averageHrv: sample.averageHrv,
+      steps: sample.steps,
+      sleepMinutes: sample.sleepMinutes,
+      heartRateSamples: timedValues(const [
+        (0, 30, 60),
+        (3, 0, 58),
+        (6, 30, 61),
+        (8, 30, 70),
+        (10, 30, 76),
+        (12, 30, 81),
+        (14, 30, 72),
+        (16, 30, 79),
+        (18, 30, 84),
+        (20, 30, 77),
+        (22, 30, 68),
+      ], sample.averageHeartRate),
+      hrvSamples: timedValues(const [
+        (0, 35, 66),
+        (3, 5, 70),
+        (6, 35, 64),
+        (8, 35, 57),
+        (10, 35, 51),
+        (12, 35, 43),
+        (14, 35, 54),
+        (16, 35, 46),
+        (18, 35, 39),
+        (20, 35, 45),
+        (22, 35, 56),
+      ], sample.averageHrv),
+      sleepSamples: [
+        HealthChartPoint(today.add(const Duration(minutes: 15)), 438),
+      ],
+      stepSamples: timedValues(const [
+        (7, 0, 420),
+        (9, 0, 760),
+        (11, 0, 1050),
+        (13, 0, 880),
+        (15, 0, 930),
+        (17, 0, 1120),
+        (19, 0, 740),
+        (21, 0, 380),
+      ], 0),
     );
   }
 }
@@ -9976,6 +12812,7 @@ class HealthStressSample {
     required this.hrvBaseline,
     required this.steps,
     required this.sleepMinutes,
+    this.includesTimeline = false,
   });
 
   final String label;
@@ -9985,6 +12822,7 @@ class HealthStressSample {
   final double hrvBaseline;
   final double steps;
   final double sleepMinutes;
+  final bool includesTimeline;
 
   String get shortSummary {
     return '心率 ${averageHeartRate.round()} · HRV ${averageHrv.round()}ms · 基线 ${hrvBaseline.round()}ms';
@@ -9996,20 +12834,39 @@ class HealthStressEstimate {
     required this.stressValue,
     required this.summary,
     required this.stats,
+    this.hrvBaseline,
+    this.confidence = 0,
+    this.mode = StressDataMode.noHrv,
+    this.level = StressLevel.stable,
+    this.isActivityFiltered = false,
+    this.reason,
   });
 
   final double stressValue;
   final String summary;
   final HealthStressStats stats;
+  final double? hrvBaseline;
+  final int confidence;
+  final StressDataMode mode;
+  final StressLevel level;
+  final bool isActivityFiltered;
+  final String? reason;
 
   HealthStressEstimate copyWith({
     HealthStressStats? stats,
     double? stressValue,
+    double? hrvBaseline,
   }) {
     return HealthStressEstimate(
       stressValue: stressValue ?? this.stressValue,
       summary: summary,
       stats: stats ?? this.stats,
+      hrvBaseline: hrvBaseline ?? this.hrvBaseline,
+      confidence: confidence,
+      mode: mode,
+      level: level,
+      isActivityFiltered: isActivityFiltered,
+      reason: reason,
     );
   }
 }
@@ -10028,9 +12885,12 @@ class HealthStressStats {
     required this.steps,
     required this.sleepMinutes,
     this.heartRateSamples = const [],
+    this.restingHeartRateSamples = const [],
     this.hrvSamples = const [],
     this.sleepSamples = const [],
     this.stepSamples = const [],
+    this.rawStepSamples = const [],
+    this.bodyTemperatureSamples = const [],
     this.stressSamples = const [],
   });
 
@@ -10039,11 +12899,11 @@ class HealthStressStats {
     final restingHeartRates = <double>[];
     final hrvValues = <double>[];
     final heartRateEntries = <HealthChartPoint>[];
+    final restingHeartRateEntries = <HealthChartPoint>[];
     final hrvEntries = <HealthChartPoint>[];
-    final sleepEntries = <HealthChartPoint>[];
+    final sleepIntervals = <({DateTime start, DateTime end})>[];
     final stepEntries = <HealthChartPoint>[];
-    double steps = 0;
-    double sleepMinutes = 0;
+    final bodyTemperatureEntries = <HealthChartPoint>[];
 
     for (final point in points) {
       final value = _numericValue(point);
@@ -10057,34 +12917,113 @@ class HealthStressStats {
           heartRateEntries.add(HealthChartPoint(point.dateFrom, value));
         case HealthDataType.RESTING_HEART_RATE:
           restingHeartRates.add(value);
+          restingHeartRateEntries.add(HealthChartPoint(point.dateFrom, value));
         case HealthDataType.HEART_RATE_VARIABILITY_SDNN:
           hrvValues.add(value);
           hrvEntries.add(HealthChartPoint(point.dateFrom, value));
         case HealthDataType.STEPS:
-          steps += value;
           stepEntries.add(HealthChartPoint(point.dateFrom, value));
+        case HealthDataType.BODY_TEMPERATURE:
+          bodyTemperatureEntries.add(HealthChartPoint(point.dateFrom, value));
         case HealthDataType.SLEEP_ASLEEP:
         case HealthDataType.SLEEP_DEEP:
         case HealthDataType.SLEEP_LIGHT:
         case HealthDataType.SLEEP_REM:
-          sleepMinutes += value;
-          sleepEntries.add(HealthChartPoint(point.dateFrom, value));
+          if (point.dateTo.isAfter(point.dateFrom)) {
+            sleepIntervals.add((start: point.dateFrom, end: point.dateTo));
+          }
         default:
           break;
       }
     }
+
+    final dailyStepEntries = _sumPointsByDay(stepEntries);
+    final dailySleepEntries = _sumSleepByWakeDay(sleepIntervals);
+    final steps = dailyStepEntries.isEmpty ? 0.0 : dailyStepEntries.last.value;
+    final sleepMinutes = dailySleepEntries.isEmpty
+        ? 0.0
+        : dailySleepEntries.last.value;
 
     return HealthStressStats(
       averageHeartRate: _average(heartRates),
       averageRestingHeartRate: _average(restingHeartRates),
       averageHrv: _average(hrvValues),
       steps: steps,
-      sleepMinutes: sleepMinutes.clamp(0, 10 * 60).toDouble(),
+      sleepMinutes: sleepMinutes.clamp(0, 24 * 60).toDouble(),
       heartRateSamples: _visibleTimedValues(heartRateEntries),
+      restingHeartRateSamples: _visibleTimedValues(restingHeartRateEntries),
       hrvSamples: _visibleTimedValues(hrvEntries),
-      sleepSamples: _visibleTimedValues(sleepEntries),
-      stepSamples: _visibleTimedValues(stepEntries),
+      sleepSamples: _visibleTimedValues(dailySleepEntries),
+      stepSamples: _visibleTimedValues(dailyStepEntries),
+      rawStepSamples: _visibleTimedValues(stepEntries),
+      bodyTemperatureSamples: _visibleTimedValues(bodyTemperatureEntries),
     );
+  }
+
+  static List<HealthChartPoint> _sumPointsByDay(List<HealthChartPoint> points) {
+    final totals = <DateTime, double>{};
+    for (final point in points) {
+      final local = point.time.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      totals[day] = (totals[day] ?? 0) + point.value;
+    }
+    final result = [
+      for (final entry in totals.entries)
+        HealthChartPoint(entry.key.add(const Duration(hours: 12)), entry.value),
+    ];
+    result.sort((a, b) => a.time.compareTo(b.time));
+    return result;
+  }
+
+  static List<HealthChartPoint> _sumSleepByWakeDay(
+    List<({DateTime start, DateTime end})> intervals,
+  ) {
+    if (intervals.isEmpty) {
+      return const [];
+    }
+    final sorted = [...intervals]..sort((a, b) => a.start.compareTo(b.start));
+    final merged = <({DateTime start, DateTime end})>[];
+    for (final interval in sorted) {
+      if (merged.isEmpty || interval.start.isAfter(merged.last.end)) {
+        merged.add(interval);
+        continue;
+      }
+      final previous = merged.removeLast();
+      merged.add((
+        start: previous.start,
+        end: interval.end.isAfter(previous.end) ? interval.end : previous.end,
+      ));
+    }
+
+    const maximumStageGap = Duration(hours: 3);
+    final sessions = <List<({DateTime start, DateTime end})>>[];
+    for (final interval in merged) {
+      if (sessions.isNotEmpty &&
+          interval.start.difference(sessions.last.last.end) <=
+              maximumStageGap) {
+        sessions.last.add(interval);
+      } else {
+        sessions.add([interval]);
+      }
+    }
+
+    final totals = <DateTime, double>{};
+    for (final session in sessions) {
+      final wakeTime = session.last.end.toLocal();
+      final wakeDay = DateTime(wakeTime.year, wakeTime.month, wakeTime.day);
+      final minutes = session.fold<double>(
+        0,
+        (total, interval) =>
+            total + interval.end.difference(interval.start).inSeconds / 60,
+      );
+      totals[wakeDay] = (totals[wakeDay] ?? 0) + minutes;
+    }
+    final result = [
+      for (final entry in totals.entries)
+        HealthChartPoint(entry.key.add(const Duration(hours: 12)), entry.value),
+    ];
+    result.sort((a, b) => a.time.compareTo(b.time));
+    return result;
   }
 
   final double? averageHeartRate;
@@ -10093,9 +13032,12 @@ class HealthStressStats {
   final double steps;
   final double sleepMinutes;
   final List<HealthChartPoint> heartRateSamples;
+  final List<HealthChartPoint> restingHeartRateSamples;
   final List<HealthChartPoint> hrvSamples;
   final List<HealthChartPoint> sleepSamples;
   final List<HealthChartPoint> stepSamples;
+  final List<HealthChartPoint> rawStepSamples;
+  final List<HealthChartPoint> bodyTemperatureSamples;
   final List<HealthChartPoint> stressSamples;
 
   bool get hasAnySignal {
@@ -10111,78 +13053,101 @@ class HealthStressStats {
     required double? hrvBaseline,
     required double lastStress,
     required bool useHrv,
+    double? restingHeartRateBaseline,
+    double? sleepBaselineMinutes,
+    double? bodyTemperatureBaseline,
+    int baselineDays = 0,
+    DateTime? now,
   }) {
-    final heartRate = averageHeartRate;
-    final hrv = averageHrv;
-    final resolvedHeartRateBaseline =
-        averageRestingHeartRate ?? heartRateBaseline;
+    final currentTime = now ?? DateTime.now();
+    final heartRate = heartRateSamples.isNotEmpty
+        ? heartRateSamples.last.value
+        : averageHeartRate;
+    final latestHrv = hrvSamples.isNotEmpty ? hrvSamples.last : null;
+    final hrv = latestHrv?.value ?? averageHrv;
+    final resolvedHeartRateBaseline = heartRateBaseline;
     final safeLastStress = lastStress.clamp(0, 100).toDouble();
     final wearableStress = latestWearableStress;
 
     if ((!useHrv || hrv == null) && wearableStress != null) {
+      final value = wearableStress.round().clamp(0, 100);
+      final estimate = StressEstimate(
+        stress: value,
+        confidence: 80,
+        mode: StressDataMode.noHrv,
+        level: stressLevelFor(value),
+        isActivityFiltered: false,
+        reason: '使用穿戴设备提供的压力参考值',
+      );
       return HealthStressCalculation(
-        stressValue: wearableStress.roundToDouble(),
+        stressValue: value.toDouble(),
         summary: useHrv
             ? '使用穿戴设备压力值：HRV 数据缺失，已记录 ${wearableStress.round()}。'
             : '使用穿戴设备压力值：${wearableStress.round()}。',
+        estimate: estimate,
       );
     }
-
-    final missing = <String>[
-      if (heartRate == null) '最近心率 HR',
-      if (resolvedHeartRateBaseline == null || resolvedHeartRateBaseline <= 0)
-        '心率基线 HR_baseline',
-      if (!useHrv && wearableStress == null) '穿戴设备压力值',
-    ];
-    if (missing.isNotEmpty) {
-      return HealthStressCalculation(
-        stressValue: safeLastStress.roundToDouble(),
-        summary: '数据不足：缺少${missing.join('、')}。',
-      );
-    }
-
-    final currentHeartRate = heartRate!;
-    final currentHeartRateBaseline = resolvedHeartRateBaseline!;
-
-    if (_looksLikePhysicalActivity(
-      heartRate: currentHeartRate,
-      baseline: currentHeartRateBaseline,
-      at: DateTime.now(),
-    )) {
-      return HealthStressCalculation(
-        stressValue: safeLastStress.roundToDouble(),
-        summary: '活动中，暂停压力判断',
-      );
-    }
-
-    final heartRateDelta =
-        (currentHeartRate - currentHeartRateBaseline) /
-        currentHeartRateBaseline;
-    final heartRateScore = (heartRateDelta / 0.30 * 100)
-        .clamp(0, 100)
-        .toDouble();
-    final canUseHrv =
-        useHrv && hrv != null && hrvBaseline != null && hrvBaseline > 0;
-    if (!canUseHrv) {
-      final hrvFallbackText = useHrv ? ' · HRV 数据缺失，暂用心率估算' : '';
-      return HealthStressCalculation(
-        stressValue: heartRateScore.roundToDouble(),
-        summary:
-            '$summary$hrvFallbackText · 未使用 HRV · 心率分 ${heartRateScore.round()}',
-      );
-    }
-
-    final currentHrv = hrv;
-    final currentHrvBaseline = hrvBaseline;
-    final hrvDelta = (currentHrvBaseline - currentHrv) / currentHrvBaseline;
-    final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
-    final rawStress = hrvScore * 0.65 + heartRateScore * 0.35;
-    final stress = rawStress.clamp(0, 100);
-
+    final recentStart = currentTime.subtract(const Duration(minutes: 15));
+    final recentHeartRates = heartRateSamples
+        .where(
+          (sample) =>
+              !sample.time.isBefore(recentStart) &&
+              !sample.time.isAfter(currentTime) &&
+              resolvedHeartRateBaseline != null &&
+              !_looksLikePhysicalActivity(
+                heartRate: sample.value,
+                baseline: resolvedHeartRateBaseline,
+                at: sample.time,
+              ),
+        )
+        .map((sample) => sample.value)
+        .toList();
+    final isActivity =
+        heartRate != null &&
+        resolvedHeartRateBaseline != null &&
+        _looksLikePhysicalActivity(
+          heartRate: heartRate,
+          baseline: resolvedHeartRateBaseline,
+          at: currentTime,
+        );
+    final lastActivityAt = _lastSignificantActivityAt(currentTime);
+    final todayRhr = _latestValueOnDay(restingHeartRateSamples, currentTime);
+    final lastSleep = sleepSamples.isEmpty ? null : sleepSamples.last.value;
+    final temperatureAnomaly = _hasTemperatureAnomaly(
+      todayRhr: todayRhr,
+      restingBaseline: restingHeartRateBaseline,
+      temperatureBaseline: bodyTemperatureBaseline,
+    );
+    final estimate = calculateStressV2(
+      heartRate: heartRate,
+      baselineHeartRate: resolvedHeartRateBaseline,
+      hrv: useHrv ? hrv : null,
+      baselineHrv: useHrv ? hrvBaseline : null,
+      isHrvFresh:
+          latestHrv == null ||
+          currentTime.difference(latestHrv.time).abs() <=
+              const Duration(hours: 6),
+      recentHeartRates: recentHeartRates,
+      todayRestingHeartRate: todayRhr,
+      baselineRestingHeartRate: restingHeartRateBaseline,
+      lastNightSleepMinutes: lastSleep,
+      baselineSleepMinutes: sleepBaselineMinutes,
+      baselineDays: baselineDays,
+      isActivity: isActivity,
+      timeSinceActivity: lastActivityAt == null
+          ? null
+          : currentTime.difference(lastActivityAt),
+      hasTemperatureAnomaly: temperatureAnomaly,
+    );
+    final displayedStress = estimate.stress?.toDouble() ?? safeLastStress;
     return HealthStressCalculation(
-      stressValue: stress.roundToDouble(),
-      summary:
-          '$summary · 心率分 ${heartRateScore.round()} · HRV分 ${hrvScore.round()}',
+      stressValue: displayedStress,
+      summary: estimate.isActivityFiltered
+          ? estimate.reason ?? '活动中，暂不判断压力状态'
+          : '${estimate.stress == null ? '数据不足' : '$summary · ${stressLevelLabel(estimate.level)}'}'
+                ' · 可信度 ${estimate.confidence}%'
+                '${estimate.reason == null ? '' : ' · ${estimate.reason}'}',
+      estimate: estimate,
     );
   }
 
@@ -10216,6 +13181,87 @@ class HealthStressStats {
       return null;
     }
     return values.reduce((a, b) => a + b) / values.length;
+  }
+
+  static double? _median(Iterable<double> values) {
+    final sorted = values.where((value) => value.isFinite).toList()..sort();
+    if (sorted.isEmpty) return null;
+    final middle = sorted.length ~/ 2;
+    return sorted.length.isOdd
+        ? sorted[middle]
+        : (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+
+  double? medianRestingHeartRate() =>
+      _median(_dailyMedians(restingHeartRateSamples));
+
+  double? medianSleepMinutes() =>
+      _median(sleepSamples.map((sample) => sample.value));
+
+  double? medianBodyTemperature() =>
+      _median(_dailyMedians(bodyTemperatureSamples));
+
+  static List<double> _dailyMedians(List<HealthChartPoint> samples) {
+    final valuesByDay = <DateTime, List<double>>{};
+    for (final sample in samples) {
+      final local = sample.time.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      valuesByDay.putIfAbsent(day, () => []).add(sample.value);
+    }
+    return valuesByDay.values.map(_median).whereType<double>().toList();
+  }
+
+  int get baselineDayCount {
+    final days = <DateTime>{};
+    for (final sample in [
+      ...heartRateSamples,
+      ...restingHeartRateSamples,
+      ...hrvSamples,
+      ...sleepSamples,
+    ]) {
+      final local = sample.time.toLocal();
+      days.add(DateTime(local.year, local.month, local.day));
+    }
+    return days.length.clamp(0, 14);
+  }
+
+  double? heartRateBaselineFor(DateTime at) {
+    final hour = at.hour;
+    int? startHour;
+    int? endHour;
+    if (hour >= 6 && hour < 9) {
+      startHour = 6;
+      endHour = 9;
+    } else if (hour >= 9 && hour < 12) {
+      startHour = 9;
+      endHour = 12;
+    } else if (hour >= 12 && hour < 15) {
+      startHour = 12;
+      endHour = 15;
+    } else if (hour >= 15 && hour < 18) {
+      startHour = 15;
+      endHour = 18;
+    } else if (hour >= 18 && hour < 21) {
+      startHour = 18;
+      endHour = 21;
+    } else if (hour >= 21) {
+      startHour = 21;
+      endHour = 24;
+    }
+    if (startHour != null && endHour != null) {
+      final candidates = heartRateSamples
+          .where((sample) {
+            final local = sample.time.toLocal();
+            return local.hour >= startHour! &&
+                local.hour < endHour! &&
+                _nearbySteps(sample.time, window: const Duration(minutes: 20)) <
+                    80;
+          })
+          .map((sample) => sample.value)
+          .toList();
+      if (candidates.length >= 3) return _median(candidates);
+    }
+    return medianRestingHeartRate();
   }
 
   HealthStressStats mergeManualEntries(List<ManualHealthEntry> entries) {
@@ -10260,9 +13306,12 @@ class HealthStressStats {
         ...heartRateSamples,
         ...manualHeartRateTimed,
       ]),
+      restingHeartRateSamples: restingHeartRateSamples,
       hrvSamples: _visibleTimedValues([...hrvSamples, ...manualHrvTimed]),
       sleepSamples: sleepSamples,
       stepSamples: stepSamples,
+      rawStepSamples: rawStepSamples,
+      bodyTemperatureSamples: bodyTemperatureSamples,
       stressSamples: _visibleTimedValues([
         ...stressSamples,
         ...manualStressTimed,
@@ -10275,9 +13324,11 @@ class HealthStressStats {
     required double? hrvBaseline,
     required double lastStress,
     required bool useHrv,
+    double? restingHeartRateBaseline,
+    double? sleepBaselineMinutes,
   }) {
     final resolvedHeartRateBaseline =
-        averageRestingHeartRate ?? heartRateBaseline;
+        heartRateBaseline ?? averageRestingHeartRate;
     if (resolvedHeartRateBaseline == null ||
         resolvedHeartRateBaseline <= 0 ||
         heartRateSamples.isEmpty) {
@@ -10285,34 +13336,86 @@ class HealthStressStats {
     }
 
     final pairedSamples = <HealthChartPoint>[];
-    final pausedStress = lastStress.clamp(0, 100).toDouble();
     for (final heartRate in heartRateSamples) {
       if (_looksLikePhysicalActivity(
         heartRate: heartRate.value,
         baseline: resolvedHeartRateBaseline,
         at: heartRate.time,
       )) {
-        pairedSamples.add(HealthChartPoint(heartRate.time, pausedStress));
         continue;
       }
-      final heartRateDelta =
-          (heartRate.value - resolvedHeartRateBaseline) /
-          resolvedHeartRateBaseline;
-      final heartRateScore = (heartRateDelta / 0.30 * 100)
-          .clamp(0, 100)
-          .toDouble();
+      final lastActivityAt = _lastSignificantActivityAt(heartRate.time);
+      if (lastActivityAt != null &&
+          heartRate.time.difference(lastActivityAt) <=
+              const Duration(minutes: 30)) {
+        continue;
+      }
+      final heartRateScore = calculateHrScore(
+        heartRate: heartRate.value,
+        baselineHeartRate: resolvedHeartRateBaseline,
+      );
       final hrv = _nearestSample(hrvSamples, heartRate.time);
       final canUseHrv =
           useHrv && hrv != null && hrvBaseline != null && hrvBaseline > 0;
-      final rawStress = canUseHrv
-          ? (() {
-              final hrvDelta = (hrvBaseline - hrv.value) / hrvBaseline;
-              final hrvScore = (hrvDelta / 0.40 * 100).clamp(0, 100).toDouble();
-              return hrvScore * 0.65 + heartRateScore * 0.35;
-            })()
-          : heartRateScore;
+      final recentScores = heartRateSamples
+          .where(
+            (sample) =>
+                !sample.time.isAfter(heartRate.time) &&
+                !sample.time.isBefore(
+                  heartRate.time.subtract(const Duration(minutes: 15)),
+                ) &&
+                !_looksLikePhysicalActivity(
+                  heartRate: sample.value,
+                  baseline: resolvedHeartRateBaseline,
+                  at: sample.time,
+                ),
+          )
+          .map(
+            (sample) => calculateHrScore(
+              heartRate: sample.value,
+              baselineHeartRate: resolvedHeartRateBaseline,
+            ),
+          )
+          .toList();
+      final acuteStress = canUseHrv
+          ? calculateAcuteStressWithHrv(
+              hrScore: heartRateScore,
+              hrvScore: calculateHrvScore(
+                hrv: hrv.value,
+                baselineHrv: hrvBaseline,
+              ),
+            )
+          : calculateAcuteStressWithoutHrv(
+              hrScore: heartRateScore,
+              recentHrScores: recentScores,
+            );
+      final rhr = _latestValueOnDay(restingHeartRateSamples, heartRate.time);
+      final eligibleSleep = sleepSamples
+          .where((sample) => !sample.time.isAfter(heartRate.time))
+          .toList();
+      final sleep = eligibleSleep.isEmpty ? null : eligibleSleep.last.value;
+      final recoveryLoad = calculateRecoveryLoad(
+        rhrScore: rhr != null && restingHeartRateBaseline != null
+            ? calculateRhrScore(
+                restingHeartRate: rhr,
+                baselineRestingHeartRate: restingHeartRateBaseline,
+              )
+            : null,
+        sleepScore: sleep != null && sleepBaselineMinutes != null
+            ? calculateSleepScore(
+                sleepMinutes: sleep,
+                baselineSleepMinutes: sleepBaselineMinutes,
+              )
+            : null,
+      );
       pairedSamples.add(
-        HealthChartPoint(heartRate.time, rawStress.clamp(0, 100).toDouble()),
+        HealthChartPoint(
+          heartRate.time,
+          calculateFinalStress(
+            acuteStress: acuteStress,
+            recoveryLoad: recoveryLoad,
+          ).toDouble(),
+        ),
       );
     }
 
@@ -10323,9 +13426,12 @@ class HealthStressStats {
       steps: steps,
       sleepMinutes: sleepMinutes,
       heartRateSamples: heartRateSamples,
+      restingHeartRateSamples: restingHeartRateSamples,
       hrvSamples: hrvSamples,
       sleepSamples: sleepSamples,
       stepSamples: stepSamples,
+      rawStepSamples: rawStepSamples,
+      bodyTemperatureSamples: bodyTemperatureSamples,
       stressSamples: _visibleTimedValues([...stressSamples, ...pairedSamples]),
     );
   }
@@ -10367,11 +13473,62 @@ class HealthStressStats {
   double _nearbySteps(DateTime at, {required Duration window}) {
     final start = at.subtract(window);
     final end = at.add(window);
-    return stepSamples
+    final source = rawStepSamples.isEmpty ? stepSamples : rawStepSamples;
+    return source
         .where(
           (sample) => !sample.time.isBefore(start) && !sample.time.isAfter(end),
         )
         .fold<double>(0, (total, sample) => total + sample.value);
+  }
+
+  DateTime? _lastSignificantActivityAt(DateTime now) {
+    final source = rawStepSamples.isEmpty ? stepSamples : rawStepSamples;
+    DateTime? latest;
+    for (final sample in source) {
+      if (sample.time.isAfter(now) ||
+          now.difference(sample.time) > const Duration(minutes: 90)) {
+        continue;
+      }
+      if (_nearbySteps(sample.time, window: const Duration(minutes: 10)) >=
+              80 &&
+          (latest == null || sample.time.isAfter(latest))) {
+        latest = sample.time;
+      }
+    }
+    return latest;
+  }
+
+  static double? _latestValueOnDay(
+    List<HealthChartPoint> samples,
+    DateTime day,
+  ) {
+    for (final sample in samples.reversed) {
+      final local = sample.time.toLocal();
+      if (local.year == day.year &&
+          local.month == day.month &&
+          local.day == day.day) {
+        return sample.value;
+      }
+    }
+    return null;
+  }
+
+  bool _hasTemperatureAnomaly({
+    required double? todayRhr,
+    required double? restingBaseline,
+    required double? temperatureBaseline,
+  }) {
+    if (bodyTemperatureSamples.isEmpty ||
+        todayRhr == null ||
+        restingBaseline == null ||
+        restingBaseline <= 0 ||
+        temperatureBaseline == null ||
+        temperatureBaseline <= 0 ||
+        todayRhr < restingBaseline * 1.06) {
+      return false;
+    }
+    final latest = bodyTemperatureSamples.last.value;
+    return (latest - temperatureBaseline).abs() >= 0.5;
   }
 
   static List<HealthChartPoint> _visibleTimedValues(
@@ -10386,10 +13543,12 @@ class HealthStressCalculation {
   const HealthStressCalculation({
     required this.stressValue,
     required this.summary,
+    required this.estimate,
   });
 
   final double stressValue;
   final String summary;
+  final StressEstimate estimate;
 }
 
 class ManualHealthEntry {
