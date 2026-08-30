@@ -80,10 +80,10 @@ export default function Home() {
           {capabilityGroups.map((group) => (
             <article className={`journey-card ${group.className} reveal`} key={group.place}>
               <div className="card-topline"><span>{group.index}</span><span>{group.place}</span></div>
-              <div className="card-scene" aria-hidden="true">
-                {group.index === '01' && <><div className="cabin"><i /><b /></div><div className="signal-rings"><span /><span /><span /></div></>}
-                {group.index === '02' && <><div className="lighthouse"><i /><b /></div><div className="light-beam" /></>}
-                {group.index === '03' && <div className="garden"><span>✿</span><span>❀</span><span>✾</span><span>❧</span></div>}
+              <div className="card-scene">
+                {group.index === '01' && <Image className="journey-art journey-art-cabin" src="/cabin.webp" width={1536} height={1024} sizes="(max-width: 820px) calc(100vw - 88px), 30vw" alt="夜晚亮着温暖灯光的 MoodLand 木屋" unoptimized />}
+                {group.index === '02' && <Image className="journey-art journey-art-lighthouse" src="/lighthouse.webp" width={1217} height={1293} sizes="(max-width: 820px) calc(100vw - 88px), 26vw" alt="坐落在小岛上的 MoodLand 灯塔" unoptimized />}
+                {group.index === '03' && <div className="garden" aria-hidden="true"><span>✿</span><span>❀</span><span>✾</span><span>❧</span></div>}
               </div>
               <div className="card-copy"><h3>{group.title}</h3><p>{group.description}</p><ul>{group.capabilities.map((capability) => <li key={capability}>{capability}</li>)}</ul></div>
             </article>
