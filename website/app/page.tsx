@@ -39,7 +39,7 @@ export default function Home() {
           <p className="eyebrow">YOUR EMOTIONS, A PLACE TO LAND</p>
           <h1><span>给情绪一座岛，</span><span>也给自己一点时间。</span></h1>
           <p className="lead">MoodLand 把身体的信号、当下的心情与温柔的陪伴，安放在一座会与你一起呼吸的小岛上。</p>
-          <div className="hero-actions"><a className="primary-button" href="#product">看看真实的 MoodLand</a><a className="testflight-button" href="/testflight" target="_blank" rel="noreferrer">加入 TestFlight <span>↗</span></a><a className="text-button" href="#features">探索小岛 <span>↗</span></a></div>
+          <div className="hero-actions"><a className="primary-button" href="#product">看看真实的 MoodLand</a><a className="testflight-button" href="/testflight" target="_blank" rel="noreferrer">加入 iOS 测试 <span>↗</span></a><a className="testflight-button" href="/android-test" target="_blank" rel="noreferrer">加入 Android 测试 <span>↗</span></a><a className="text-button" href="#features">探索小岛 <span>↗</span></a></div>
         </div>
 
         <a className="scroll-cue" href="#explore" aria-label="向下探索"><span>向下探索</span><i /></a>
@@ -61,7 +61,8 @@ export default function Home() {
           <div className="product-copy reveal">
             <p className="section-kicker">A LIVING PRODUCT</p>
             <h2>MoodLand，<br />正在发生。</h2>
-            <p>这座小岛不只存在于想象里。MoodLand 已经在 iPhone 上运行，把 HealthKit 中的身体信号、实时压力趋势与 AI 情绪陪伴放进同一段日常。</p>
+            <p>这座小岛不只存在于想象里。MoodLand 已经在 iPhone 和 Android 上运行，把 HealthKit 和 Android Health Connect 中的身体信号、实时压力趋势与 AI 情绪陪伴放进同一段日常。</p>
+            <p className="android-beta-note">Android 端正在 beta 测试中，可能无法获取健康数据。</p>
             <div className="product-badges" aria-label="MoodLand 已实现的核心能力"><span><i />HealthKit</span><span><i />实时压力趋势</span><span><i />AI 情绪陪伴</span></div>
             <p className="product-proof"><strong>真实 App 截图</strong><span>来自当前 MoodLand iOS 项目</span></p>
           </div>
@@ -117,7 +118,7 @@ export default function Home() {
         <div className="story-points"><p className="reveal"><strong>一座属于你的岛</strong><span>白昼与夜晚会随时间变化，记录也会慢慢塑造这座岛。</span></p><p className="reveal"><strong>一位一直亮着的灯塔</strong><span>无论想倾诉、梳理情绪，还是只想安静一下，它都在这里。</span></p><p className="reveal"><strong>一份由你掌握的记录</strong><span>我们认真对待健康与情绪数据，也尊重你决定如何使用它。</span></p></div>
       </section>
 
-      <section className="closing-section"><div className="reveal"><p className="section-kicker">COMING SOON</p><h2>准备好登上<br />自己的情绪小岛了吗？</h2></div><a className="closing-button" href="/testflight" target="_blank" rel="noreferrer">加入内测 <span>→</span></a></section>
+      <section className="closing-section"><div className="reveal"><p className="section-kicker">COMING SOON</p><h2>准备好登上<br />自己的情绪小岛了吗？</h2></div><div className="closing-actions"><a className="closing-button" href="/testflight" target="_blank" rel="noreferrer">加入 iOS 内测 <span>→</span></a><a className="closing-button" href="/android-test" target="_blank" rel="noreferrer">加入 Android 内测 <span>→</span></a></div></section>
       <footer className="page-shell"><a className="brand" href="#top"><span className="brand-mark">M</span><span>MoodLand</span></a><p>给情绪一座岛，也给自己一点时间。</p><span>© 2026 MoodLand</span></footer>
     </main>
   );
