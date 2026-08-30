@@ -78,6 +78,7 @@ img { display: block; max-width: 100%; }
 .product-copy { max-width: 500px; }
 .product-copy h2 { font-size: clamp(48px, 5.4vw, 78px); line-height: 1.25; }
 .product-copy > p:not(.section-kicker):not(.product-proof) { margin: 28px 0; color: var(--muted); font-size: 15px; line-height: 1.95; }
+.product-copy > .android-beta-note { margin: -13px 0 24px; color: #8a6553; font-size: 12px; line-height: 1.7; }
 .product-badges { display: flex; flex-wrap: wrap; gap: 9px; }
 .product-badges span { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 14px; border: 1px solid rgba(24,58,52,.18); border-radius: 999px; background: rgba(255,255,255,.34); font-family: var(--font-en), var(--font-ui-cn); font-size: 11px; font-weight: 600; }
 .product-badges i { width: 6px; height: 6px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 0 4px rgba(217,114,87,.12); }
@@ -167,6 +168,7 @@ img { display: block; max-width: 100%; }
 .story-points span { color: var(--muted); font-size: 13px; line-height: 1.85; }
 .closing-section { display: flex; justify-content: space-between; align-items: end; gap: 50px; padding: clamp(100px, 10vw, 145px) max(var(--gutter), calc((100vw - var(--shell)) / 2)); background: var(--coral); color: #fff4e3; }
 .closing-section h2 { font-size: clamp(48px, 6vw, 84px); line-height: 1.28; }
+.closing-actions { display: flex; flex: 0 0 min(280px, 100%); flex-direction: column; gap: 18px; width: min(280px, 100%); }
 .closing-button { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; width: min(280px, 100%); min-height: 58px; padding: 0 5px; border-bottom: 1px solid currentColor; font-size: 14px; font-weight: 600; }
 .closing-button span { font-family: var(--font-en); font-size: 22px; transition: transform .2s ease; }
 .closing-button:hover span { transform: translateX(6px); }
@@ -223,7 +225,7 @@ footer > span { text-align: right; font-family: var(--font-en); font-size: 10px;
   .story-heading { grid-template-columns: 1fr; gap: 12px; }
   .story-points { grid-template-columns: 1fr; gap: 32px; margin-top: 65px; }
   .closing-section { display: block; }
-  .closing-button { margin-top: 58px; }
+  .closing-actions { margin-top: 58px; }
   footer { grid-template-columns: 1fr; gap: 20px; text-align: center; }
   footer p, footer > span { margin: 0; text-align: center; }
   footer .brand { justify-content: center; }
